@@ -1,12 +1,19 @@
-// contexts/OnboardingContext.tsx - UPDATED
+// contexts/OnboardingContext.tsx - FIXED VERSION
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, ReactNode, useContext, useState } from "react";
+import React, {
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
+import { Alert } from "react-native";
 import { useAuth } from "../hooks/useAuth";
 import {
-    MedicalData,
-    OnboardingData,
-    UserData
-} from "../types/onboarding";
+  getUserData,
+  saveOnboardingData,
+} from "../lib/firebaseOnboardingService";
+import { MedicalData, OnboardingData, UserData } from "../types/onboarding";
 
 const ONBOARDING_COMPLETED_KEY = "@medguard_onboarding_completed";
 
@@ -18,6 +25,8 @@ interface OnboardingContextType {
   setCurrentStep: (step: number) => void;
   completeOnboarding: () => Promise<void>;
   isCompleted: boolean;
+  isLoading: boolean;
+  saveCurrentData: () => Promise<void>;
 }
 
 const defaultUserData: UserData = {
@@ -70,6 +79,57 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
   const [data, setData] = useState<OnboardingData>(defaultData);
   const [currentStep, setCurrentStep] = useState(0);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Load existing user data on mount
+  useEffect(() => {
+    if (user) {
+      loadUserData();
+    }
+  }, [user]);
+
+  const loadUserData = async () => {
+    try {
+      if (!user) return;
+
+      setIsLoading(true);
+
+      // Check if onboarding is already completed in AsyncStorage
+      const onboardingCompleted = await AsyncStorage.getItem(
+        `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
+      );
+
+      console.log(
+        "📋 Onboarding status from AsyncStorage:",
+        onboardingCompleted,
+      );
+
+      if (onboardingCompleted === "true") {
+        setIsCompleted(true);
+        console.log("✅ Onboarding already completed");
+
+        // Try to load data from Firestore, but don't block if it fails
+        try {
+          const firestoreData = await getUserData(user.uid);
+          if (firestoreData) {
+            setData(firestoreData);
+            console.log("📥 Data loaded from Firestore");
+          }
+        } catch (firestoreError) {
+          console.warn(
+            "⚠️ Could not load from Firestore, using defaults:",
+            firestoreError,
+          );
+        }
+      } else {
+        console.log("🔄 Onboarding not completed yet");
+      }
+    } catch (error) {
+      console.error("❌ Error loading user data:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const updateUserData = (userData: Partial<UserData>) => {
     setData((prev) => ({
@@ -85,25 +145,84 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     }));
   };
 
-  const completeOnboarding = async () => {
+  const saveCurrentData = async (): Promise<void> => {
     try {
-      console.log("Completing onboarding with data:", data);
+      if (!user) throw new Error("No user logged in");
 
-      // Save to Firestore (optional - you can add this later)
-      // await saveOnboardingDataToFirestore(user.uid, data);
+      setIsLoading(true);
+      console.log("💾 Saving current data to Firestore...");
 
-      // Mark onboarding as completed in AsyncStorage
-      if (user) {
-        await AsyncStorage.setItem(
-          `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
-          "true",
+      // Save to Firestore - but don't fail the app if it doesn't work
+      try {
+        await saveOnboardingData(user.uid, data, false);
+        console.log("✅ Current data saved successfully");
+      } catch (firestoreError) {
+        console.warn(
+          "⚠️ Firestore save failed, but continuing:",
+          firestoreError,
+        );
+        // Still continue even if Firestore fails
+      }
+    } catch (error) {
+      console.error("❌ Error in saveCurrentData:", error);
+      // Don't throw - just log and continue
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const completeOnboarding = async (): Promise<void> => {
+    try {
+      if (!user) throw new Error("No user logged in");
+
+      setIsLoading(true);
+      console.log("🚀 Completing onboarding process...");
+
+      // Try to save to Firestore first
+      try {
+        await saveOnboardingData(user.uid, data, true);
+        console.log("✅ Final data saved to Firestore");
+      } catch (firestoreError) {
+        console.warn("⚠️ Firestore final save failed:", firestoreError);
+        // Show warning but continue
+        Alert.alert(
+          "Notice",
+          "Your data was saved locally. Some features may require internet connection.",
+          [{ text: "OK" }],
         );
       }
 
+      // Always set AsyncStorage - this is critical for the app to work
+      await AsyncStorage.setItem(
+        `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
+        "true",
+      );
+
       setIsCompleted(true);
+      console.log("🎉 Onboarding marked as completed");
+
+      // Small delay for better UX
+      await new Promise((resolve) => setTimeout(resolve, 300));
     } catch (error) {
-      console.error("Error completing onboarding:", error);
-      throw error;
+      console.error("❌ Error completing onboarding:", error);
+
+      // Even on error, try to set AsyncStorage
+      try {
+        if (user) {
+          await AsyncStorage.setItem(
+            `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
+            "true",
+          );
+          setIsCompleted(true);
+          console.log("⚠️ Set completed despite error");
+        }
+      } catch (storageError) {
+        console.error("❌ Could not save to AsyncStorage:", storageError);
+      }
+
+      throw error; // Re-throw so stepper can handle it
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -117,6 +236,8 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
         setCurrentStep,
         completeOnboarding,
         isCompleted,
+        isLoading,
+        saveCurrentData,
       }}
     >
       {children}

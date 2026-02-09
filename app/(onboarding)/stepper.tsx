@@ -1,5 +1,4 @@
-// app/(onboarding)/stepper.tsx - FIXED VERSION
-import AsyncStorage from "@react-native-async-storage/async-storage";
+// app/(onboarding)/stepper.tsx - UPDATED VERSION
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -12,90 +11,97 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useAuth } from "../../hooks/useAuth";
+import { useOnboarding } from "../../contexts/OnboardingContext";
 
 export default function OnboardingStepper() {
   const router = useRouter();
-  const [currentStep, setCurrentStep] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const {
+    data,
+    currentStep,
+    setCurrentStep,
+    updateUserData,
+    updateMedicalData,
+    completeOnboarding,
+    isLoading,
+    saveCurrentData,
+  } = useOnboarding();
 
-  // Move these useState hooks to the top level
   const [newCondition, setNewCondition] = useState("");
   const [newAllergy, setNewAllergy] = useState("");
   const [newMedication, setNewMedication] = useState("");
 
-  const [data, setData] = useState({
-    userType: "patient",
-    firstName: "",
-    lastName: "",
-    dateOfBirth: "",
-    gender: "",
-    phone: "",
-    conditions: [] as string[],
-    allergies: [] as string[],
-    medications: [] as string[],
-    bloodType: "",
-    height: "",
-    weight: "",
-    notes: "",
-  });
-
-  const { user } = useAuth();
   const TOTAL_STEPS = 4;
 
-  const updateData = (key: string, value: any) => {
-    setData((prev) => ({ ...prev, [key]: value }));
+  // Helper to split name into first and last name
+  const getFirstName = () => {
+    return data.userData.name.split(" ")[0] || "";
   };
 
-  const completeOnboarding = async () => {
+  const getLastName = () => {
+    const parts = data.userData.name.split(" ");
+    return parts.length > 1 ? parts.slice(1).join(" ") : "";
+  };
+
+  const handleNameChange = (type: "first" | "last", value: string) => {
+    const firstName = type === "first" ? value : getFirstName();
+    const lastName = type === "last" ? value : getLastName();
+
+    const fullName = `${firstName} ${lastName}`.trim();
+    updateUserData({ name: fullName });
+  };
+
+  const handleComplete = async () => {
     try {
-      console.log("Completing onboarding with data:", data);
-
-      // Save to AsyncStorage
-      if (user) {
-        await AsyncStorage.setItem(
-          `@medguard_onboarding_completed_${user.uid}`,
-          "true",
-        );
-        await AsyncStorage.setItem(
-          `@medguard_user_data_${user.uid}`,
-          JSON.stringify(data),
-        );
-      }
-
-      return true;
+      await completeOnboarding();
+      router.replace("/(tabs)");
     } catch (error) {
       console.error("Error completing onboarding:", error);
-      throw error;
+      Alert.alert(
+        "Error",
+        "Failed to save your information. Please try again.",
+      );
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     // Validate current step
-    if (currentStep === 0 && !data.userType) {
+    if (currentStep === 0 && !data.userData.userType) {
       Alert.alert("Error", "Please select a user type");
       return;
     }
 
     if (currentStep === 1) {
-      if (!data.firstName.trim()) {
+      if (!getFirstName().trim()) {
         Alert.alert("Error", "Please enter your first name");
         return;
       }
-      if (!data.lastName.trim()) {
+      if (!getLastName().trim()) {
         Alert.alert("Error", "Please enter your last name");
         return;
       }
-      if (!data.dateOfBirth) {
+      if (!data.userData.dateOfBirth) {
         Alert.alert("Error", "Please enter your date of birth");
         return;
       }
-      if (data.dateOfBirth.length !== 10) {
+      if (data.userData.dateOfBirth.length !== 10) {
         Alert.alert("Error", "Please enter a complete date (YYYY-MM-DD)");
         return;
       }
-      if (!data.gender) {
+      if (!data.userData.gender) {
         Alert.alert("Error", "Please select your gender");
+        return;
+      }
+    }
+
+    // Save current step data to Firestore before proceeding
+    if (currentStep >= 1) {
+      try {
+        await saveCurrentData();
+      } catch (error) {
+        Alert.alert(
+          "Error",
+          "Failed to save your progress. Please check your connection.",
+        );
         return;
       }
     }
@@ -113,27 +119,11 @@ export default function OnboardingStepper() {
     }
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
     if (currentStep < TOTAL_STEPS - 1) {
       setCurrentStep(currentStep + 1);
     } else {
       handleComplete();
-    }
-  };
-
-  const handleComplete = async () => {
-    setLoading(true);
-    try {
-      await completeOnboarding();
-      router.replace("/(tabs)");
-    } catch (error) {
-      console.error("Error completing onboarding:", error);
-      Alert.alert(
-        "Error",
-        "Failed to save your information. Please try again.",
-      );
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -146,13 +136,12 @@ export default function OnboardingStepper() {
       </Text>
 
       <View style={styles.optionsContainer}>
-        {/* Patient Option */}
         <TouchableOpacity
           style={[
             styles.optionCard,
-            data.userType === "patient" && styles.selectedCard,
+            data.userData.userType === "patient" && styles.selectedCard,
           ]}
-          onPress={() => updateData("userType", "patient")}
+          onPress={() => updateUserData({ userType: "patient" })}
         >
           <View style={styles.optionHeader}>
             <Text style={styles.optionIcon}>👤</Text>
@@ -163,7 +152,6 @@ export default function OnboardingStepper() {
           </Text>
         </TouchableOpacity>
 
-        {/* Caregiver Option (Disabled) */}
         <View style={[styles.optionCard, styles.disabledCard]}>
           <View style={styles.optionHeader}>
             <Text style={styles.optionIcon}>🤝</Text>
@@ -199,12 +187,8 @@ export default function OnboardingStepper() {
       { id: "prefer-not-to-say", label: "Prefer not to say" },
     ];
 
-    // Format date as user types (auto-add dashes)
     const formatDateInput = (text: string) => {
-      // Remove all non-digits
       const digits = text.replace(/\D/g, "");
-
-      // Format as YYYY-MM-DD
       if (digits.length <= 4) {
         return digits;
       } else if (digits.length <= 6) {
@@ -216,7 +200,7 @@ export default function OnboardingStepper() {
 
     const handleDateChange = (text: string) => {
       const formatted = formatDateInput(text);
-      updateData("dateOfBirth", formatted);
+      updateUserData({ dateOfBirth: formatted });
     };
 
     return (
@@ -230,37 +214,34 @@ export default function OnboardingStepper() {
         </Text>
 
         <View style={styles.form}>
-          {/* First Name */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>First Name *</Text>
             <TextInput
               style={styles.input}
               placeholder="Enter your first name"
-              value={data.firstName}
-              onChangeText={(text) => updateData("firstName", text)}
+              value={getFirstName()}
+              onChangeText={(text) => handleNameChange("first", text)}
               autoCapitalize="words"
             />
           </View>
 
-          {/* Last Name */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Last Name *</Text>
             <TextInput
               style={styles.input}
               placeholder="Enter your last name"
-              value={data.lastName}
-              onChangeText={(text) => updateData("lastName", text)}
+              value={getLastName()}
+              onChangeText={(text) => handleNameChange("last", text)}
               autoCapitalize="words"
             />
           </View>
 
-          {/* Date of Birth */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Date of Birth *</Text>
             <TextInput
               style={styles.input}
               placeholder="YYYY-MM-DD"
-              value={data.dateOfBirth}
+              value={data.userData.dateOfBirth}
               onChangeText={handleDateChange}
               keyboardType="number-pad"
               maxLength={10}
@@ -270,7 +251,6 @@ export default function OnboardingStepper() {
             </Text>
           </View>
 
-          {/* Gender */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Gender *</Text>
             <View style={styles.genderOptions}>
@@ -279,14 +259,15 @@ export default function OnboardingStepper() {
                   key={gender.id}
                   style={[
                     styles.genderOption,
-                    data.gender === gender.id && styles.genderSelected,
+                    data.userData.gender === gender.id && styles.genderSelected,
                   ]}
-                  onPress={() => updateData("gender", gender.id)}
+                  onPress={() => updateUserData({ gender: gender.id })}
                 >
                   <Text
                     style={[
                       styles.genderText,
-                      data.gender === gender.id && styles.genderTextSelected,
+                      data.userData.gender === gender.id &&
+                        styles.genderTextSelected,
                     ]}
                   >
                     {gender.label}
@@ -296,7 +277,6 @@ export default function OnboardingStepper() {
             </View>
           </View>
 
-          {/* Contact Information - PHILIPPINES SPECIFIC */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Contact Information 🇵🇭</Text>
 
@@ -309,21 +289,25 @@ export default function OnboardingStepper() {
                 <TextInput
                   style={[styles.input, styles.phoneInput]}
                   placeholder="912 345 6789"
-                  value={data.phone}
+                  value={data.userData.contactInfo?.phone || ""}
                   onChangeText={(text) => {
-                    // Remove non-digits and limit to 10 digits
                     const digits = text.replace(/\D/g, "").slice(0, 10);
-                    // Format as 912 345 6789
                     let formatted = "";
                     if (digits.length > 0) formatted = digits;
                     if (digits.length > 3)
                       formatted = `${digits.slice(0, 3)} ${digits.slice(3)}`;
                     if (digits.length > 6)
                       formatted = `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
-                    updateData("phone", formatted);
+
+                    updateUserData({
+                      contactInfo: {
+                        ...data.userData.contactInfo,
+                        phone: formatted,
+                      },
+                    });
                   }}
                   keyboardType="phone-pad"
-                  maxLength={12} // 3 groups of 3 digits + 2 spaces
+                  maxLength={12}
                 />
               </View>
               <Text style={styles.helperText}>
@@ -334,7 +318,7 @@ export default function OnboardingStepper() {
 
           <View style={styles.noteBox}>
             <Text style={styles.noteText}>
-              * Required fields. All information is stored securely.
+              * Required fields. All information is stored securely in Firebase.
             </Text>
           </View>
         </View>
@@ -359,46 +343,61 @@ export default function OnboardingStepper() {
     const addCondition = () => {
       if (
         newCondition.trim() &&
-        !data.conditions.includes(newCondition.trim())
+        !data.medicalData.conditions.includes(newCondition.trim())
       ) {
-        updateData("conditions", [...data.conditions, newCondition.trim()]);
+        const updatedConditions = [
+          ...data.medicalData.conditions,
+          newCondition.trim(),
+        ];
+        updateMedicalData({ conditions: updatedConditions });
         setNewCondition("");
       }
     };
 
     const removeCondition = (index: number) => {
-      const updated = [...data.conditions];
+      const updated = [...data.medicalData.conditions];
       updated.splice(index, 1);
-      updateData("conditions", updated);
+      updateMedicalData({ conditions: updated });
     };
 
     const addAllergy = () => {
-      if (newAllergy.trim() && !data.allergies.includes(newAllergy.trim())) {
-        updateData("allergies", [...data.allergies, newAllergy.trim()]);
+      if (
+        newAllergy.trim() &&
+        !data.medicalData.allergies.includes(newAllergy.trim())
+      ) {
+        const updatedAllergies = [
+          ...data.medicalData.allergies,
+          newAllergy.trim(),
+        ];
+        updateMedicalData({ allergies: updatedAllergies });
         setNewAllergy("");
       }
     };
 
     const removeAllergy = (index: number) => {
-      const updated = [...data.allergies];
+      const updated = [...data.medicalData.allergies];
       updated.splice(index, 1);
-      updateData("allergies", updated);
+      updateMedicalData({ allergies: updated });
     };
 
     const addMedication = () => {
       if (
         newMedication.trim() &&
-        !data.medications.includes(newMedication.trim())
+        !data.medicalData.medications.includes(newMedication.trim())
       ) {
-        updateData("medications", [...data.medications, newMedication.trim()]);
+        const updatedMedications = [
+          ...data.medicalData.medications,
+          newMedication.trim(),
+        ];
+        updateMedicalData({ medications: updatedMedications });
         setNewMedication("");
       }
     };
 
     const removeMedication = (index: number) => {
-      const updated = [...data.medications];
+      const updated = [...data.medicalData.medications];
       updated.splice(index, 1);
-      updateData("medications", updated);
+      updateMedicalData({ medications: updated });
     };
 
     return (
@@ -412,7 +411,6 @@ export default function OnboardingStepper() {
         </Text>
 
         <View style={styles.form}>
-          {/* Medical Conditions */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Medical Conditions</Text>
             <Text style={styles.sectionDescription}>
@@ -436,9 +434,9 @@ export default function OnboardingStepper() {
               </TouchableOpacity>
             </View>
 
-            {data.conditions.length > 0 && (
+            {data.medicalData.conditions.length > 0 && (
               <View style={styles.listContainer}>
-                {data.conditions.map((condition, index) => (
+                {data.medicalData.conditions.map((condition, index) => (
                   <View key={index} style={styles.listItem}>
                     <Text style={styles.listItemText}>{condition}</Text>
                     <TouchableOpacity
@@ -453,7 +451,6 @@ export default function OnboardingStepper() {
             )}
           </View>
 
-          {/* Allergies */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Allergies</Text>
             <Text style={styles.sectionDescription}>
@@ -477,9 +474,9 @@ export default function OnboardingStepper() {
               </TouchableOpacity>
             </View>
 
-            {data.allergies.length > 0 && (
+            {data.medicalData.allergies.length > 0 && (
               <View style={styles.listContainer}>
-                {data.allergies.map((allergy, index) => (
+                {data.medicalData.allergies.map((allergy, index) => (
                   <View key={index} style={styles.listItem}>
                     <Text style={styles.listItemText}>{allergy}</Text>
                     <TouchableOpacity
@@ -494,11 +491,10 @@ export default function OnboardingStepper() {
             )}
           </View>
 
-          {/* Current Medications */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Current Medications</Text>
             <Text style={styles.sectionDescription}>
-              List medications you're currently taking
+              List medications youre currently taking
             </Text>
 
             <View style={styles.inputWithButton}>
@@ -518,9 +514,9 @@ export default function OnboardingStepper() {
               </TouchableOpacity>
             </View>
 
-            {data.medications.length > 0 && (
+            {data.medicalData.medications.length > 0 && (
               <View style={styles.listContainer}>
-                {data.medications.map((medication, index) => (
+                {data.medicalData.medications.map((medication, index) => (
                   <View key={index} style={styles.listItem}>
                     <Text style={styles.listItemText}>{medication}</Text>
                     <TouchableOpacity
@@ -535,7 +531,6 @@ export default function OnboardingStepper() {
             )}
           </View>
 
-          {/* Vital Information */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Vital Information</Text>
 
@@ -548,14 +543,15 @@ export default function OnboardingStepper() {
                       key={type}
                       style={[
                         styles.bloodTypeOption,
-                        data.bloodType === type && styles.bloodTypeSelected,
+                        data.medicalData.bloodType === type &&
+                          styles.bloodTypeSelected,
                       ]}
-                      onPress={() => updateData("bloodType", type)}
+                      onPress={() => updateMedicalData({ bloodType: type })}
                     >
                       <Text
                         style={[
                           styles.bloodTypeText,
-                          data.bloodType === type &&
+                          data.medicalData.bloodType === type &&
                             styles.bloodTypeTextSelected,
                         ]}
                       >
@@ -573,8 +569,8 @@ export default function OnboardingStepper() {
                 <TextInput
                   style={styles.input}
                   placeholder="175"
-                  value={data.height}
-                  onChangeText={(text) => updateData("height", text)}
+                  value={data.medicalData.height}
+                  onChangeText={(text) => updateMedicalData({ height: text })}
                   keyboardType="numeric"
                 />
               </View>
@@ -584,15 +580,14 @@ export default function OnboardingStepper() {
                 <TextInput
                   style={styles.input}
                   placeholder="70"
-                  value={data.weight}
-                  onChangeText={(text) => updateData("weight", text)}
+                  value={data.medicalData.weight}
+                  onChangeText={(text) => updateMedicalData({ weight: text })}
                   keyboardType="numeric"
                 />
               </View>
             </View>
           </View>
 
-          {/* Additional Notes */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Additional Notes</Text>
             <Text style={styles.sectionDescription}>
@@ -602,8 +597,8 @@ export default function OnboardingStepper() {
             <TextInput
               style={[styles.input, styles.textArea]}
               placeholder="e.g., Previous surgeries, family medical history, etc."
-              value={data.notes}
-              onChangeText={(text) => updateData("notes", text)}
+              value={data.medicalData.notes}
+              onChangeText={(text) => updateMedicalData({ notes: text })}
               multiline
               numberOfLines={4}
             />
@@ -611,7 +606,8 @@ export default function OnboardingStepper() {
 
           <View style={styles.privacyNote}>
             <Text style={styles.privacyText}>
-              🔒 Your medical information is encrypted and stored securely.
+              🔒 Your medical information is encrypted and stored securely in
+              Firebase.
             </Text>
           </View>
         </View>
@@ -715,18 +711,14 @@ export default function OnboardingStepper() {
     },
   ];
 
-  // In your stepper.tsx, replace the return statement footer section with this:
-
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Complete Your Profile</Text>
         <Text style={styles.subtitle}>
           Step {currentStep + 1} of {TOTAL_STEPS}: {steps[currentStep].title}
         </Text>
 
-        {/* Progress Bar */}
         <View style={styles.progressContainer}>
           <View style={styles.progressBar}>
             <View
@@ -739,29 +731,27 @@ export default function OnboardingStepper() {
         </View>
       </View>
 
-      {/* Step Content */}
       {renderStepContent()}
 
-      {/* Navigation Footer - UPDATED BUTTON LAYOUT */}
       <View style={styles.footer}>
-        {/* Step 1: Only Next button */}
         {currentStep === 0 && (
           <TouchableOpacity
             style={styles.fullWidthNextButton}
             onPress={handleNext}
-            disabled={loading}
+            disabled={isLoading}
           >
-            <Text style={styles.nextButtonText}>Continue</Text>
+            <Text style={styles.nextButtonText}>
+              {isLoading ? "Saving..." : "Continue"}
+            </Text>
           </TouchableOpacity>
         )}
 
-        {/* Step 2-3: Back + Next buttons */}
         {(currentStep === 1 || currentStep === 2) && (
           <>
             <TouchableOpacity
               style={styles.halfWidthBackButton}
               onPress={handleBack}
-              disabled={loading}
+              disabled={isLoading}
             >
               <Text style={styles.backButtonText}>Back</Text>
             </TouchableOpacity>
@@ -769,20 +759,21 @@ export default function OnboardingStepper() {
             <TouchableOpacity
               style={styles.halfWidthNextButton}
               onPress={handleNext}
-              disabled={loading}
+              disabled={isLoading}
             >
-              <Text style={styles.nextButtonText}>Continue</Text>
+              <Text style={styles.nextButtonText}>
+                {isLoading ? "Saving..." : "Continue"}
+              </Text>
             </TouchableOpacity>
           </>
         )}
 
-        {/* Step 4 (Last): Back + Skip + Next buttons */}
         {currentStep === TOTAL_STEPS - 1 && (
           <>
             <TouchableOpacity
               style={styles.thirdWidthBackButton}
               onPress={handleBack}
-              disabled={loading}
+              disabled={isLoading}
             >
               <Text style={styles.backButtonText}>Back</Text>
             </TouchableOpacity>
@@ -790,7 +781,7 @@ export default function OnboardingStepper() {
             <TouchableOpacity
               style={styles.thirdWidthSkipButton}
               onPress={handleSkip}
-              disabled={loading}
+              disabled={isLoading}
             >
               <Text style={styles.skipButtonText}>Skip</Text>
             </TouchableOpacity>
@@ -798,10 +789,10 @@ export default function OnboardingStepper() {
             <TouchableOpacity
               style={styles.thirdWidthNextButton}
               onPress={handleNext}
-              disabled={loading}
+              disabled={isLoading}
             >
               <Text style={styles.nextButtonText}>
-                {loading ? "Saving..." : "Complete"}
+                {isLoading ? "Saving..." : "Complete"}
               </Text>
             </TouchableOpacity>
           </>
@@ -811,7 +802,6 @@ export default function OnboardingStepper() {
   );
 }
 
-// Keep the same styles object from your previous code
 const styles = StyleSheet.create({
   container: {
     flex: 1,

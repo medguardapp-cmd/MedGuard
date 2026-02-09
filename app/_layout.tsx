@@ -1,9 +1,10 @@
-// app/_layout.tsx - SIMPLIFIED WORKING VERSION
+// app/_layout.tsx - UPDATED WITH ONBOARDING PROVIDER
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Slot, SplashScreen, useRouter, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
+import { OnboardingProvider } from "../contexts/OnboardingContext";
 import { auth } from "../lib/firebase";
 
 // Keys for AsyncStorage
@@ -91,5 +92,9 @@ export default function RootLayout() {
     );
   }
 
-  return <Slot />;
+  return (
+    <OnboardingProvider>
+      <Slot />
+    </OnboardingProvider>
+  );
 }
