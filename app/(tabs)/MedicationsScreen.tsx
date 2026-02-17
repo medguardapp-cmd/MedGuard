@@ -465,7 +465,13 @@ export default function MedicationsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingBottom: 55,
+        }}
+      >
         {activeTab === "medications" ? (
           // Medications List
           <View style={styles.medicationsList}>
@@ -717,7 +723,12 @@ export default function MedicationsScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{
+                paddingBottom: 55,
+              }}
+            >
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Medication Name *</Text>
                 <TextInput
@@ -843,7 +854,12 @@ export default function MedicationsScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{
+                paddingBottom: 55,
+              }}
+            >
               {medications
                 .filter((m) => m.active)
                 .map((medication) => (
@@ -907,7 +923,12 @@ export default function MedicationsScreen() {
               </View>
             )}
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{
+                paddingBottom: 30,
+              }}
+            >
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Time</Text>
                 <View style={styles.timePickerContainer}>
