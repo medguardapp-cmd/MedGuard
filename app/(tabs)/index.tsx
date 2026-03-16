@@ -10,7 +10,6 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
 } from "firebase/firestore";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -24,11 +23,16 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
 import { auth, db } from "../../lib/firebase";
+import {
+  backfillTodaySnapshot,
+  SnapshotItem,
+  snapshotKey,
+} from "../../lib/scheduleSnapshot";
 import { checkAllInteractions } from "../../lib/supabase";
 
 const DAY_WIDTH = 50;
@@ -56,14 +60,6 @@ interface Reminder {
   time: string;
   days: string[];
   enabled: boolean;
-}
-
-export interface SnapshotItem {
-  reminderId: string;
-  medicationId: string;
-  name: string;
-  dosage: string;
-  time: string;
 }
 
 interface ScheduleItem {
@@ -127,120 +123,8 @@ function formatTime12h(time: string) {
   return `${hour12}:${minutes} ${ampm}`;
 }
 
-export function snapshotKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 function dateKey(date: Date): string {
   return date.toDateString();
-}
-
-// ─────────────────────────────────────────────
-// Snapshot helpers — exported so medications.tsx can call them
-// ─────────────────────────────────────────────
-
-/**
- * Upsert a single reminder into today's schedule_snapshot.
- * Call this from medications.tsx whenever a reminder is saved.
- */
-export async function upsertReminderSnapshot(
-  userId: string,
-  reminder: Reminder,
-  today: Date = new Date(),
-) {
-  const dayName = DAY_NAMES[today.getDay()];
-  const fitsToday =
-    !reminder.days || reminder.days.length === 0
-      ? true
-      : reminder.days.includes(dayName);
-
-  if (!fitsToday || !reminder.enabled) return;
-
-  const sk = snapshotKey(today);
-  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
-  const snapDoc = await getDoc(snapRef);
-
-  const newItem: SnapshotItem = {
-    reminderId: reminder.id,
-    medicationId: reminder.medicationId,
-    name: reminder.medicationName,
-    dosage: reminder.medicationDosage,
-    time: reminder.time,
-  };
-
-  if (snapDoc.exists()) {
-    const existing: SnapshotItem[] = snapDoc.data()?.items ?? [];
-    const updated = existing.filter((i) => i.reminderId !== reminder.id);
-    updated.push(newItem);
-    await setDoc(
-      snapRef,
-      { items: updated, savedAt: serverTimestamp() },
-      { merge: true },
-    );
-  } else {
-    await setDoc(snapRef, { items: [newItem], savedAt: serverTimestamp() });
-  }
-}
-
-/**
- * Remove a reminder from today's snapshot.
- * Call this from medications.tsx when a reminder is deleted.
- * NOTE: We only remove from TODAY — past snapshots are preserved as history.
- */
-export async function removeReminderFromTodaySnapshot(
-  userId: string,
-  reminderId: string,
-  today: Date = new Date(),
-) {
-  const sk = snapshotKey(today);
-  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
-  const snapDoc = await getDoc(snapRef);
-  if (!snapDoc.exists()) return;
-
-  const existing: SnapshotItem[] = snapDoc.data()?.items ?? [];
-  const updated = existing.filter((i) => i.reminderId !== reminderId);
-  await setDoc(
-    snapRef,
-    { items: updated, savedAt: serverTimestamp() },
-    { merge: true },
-  );
-}
-
-/**
- * One-time backfill: write today's snapshot from current reminders.
- * Only runs if the snapshot doesn't exist yet.
- */
-async function backfillTodaySnapshot(
-  userId: string,
-  reminders: Reminder[],
-  today: Date,
-) {
-  const sk = snapshotKey(today);
-  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
-  const snapDoc = await getDoc(snapRef);
-  if (snapDoc.exists()) return; // already written
-
-  const dayName = DAY_NAMES[today.getDay()];
-  const items: SnapshotItem[] = reminders
-    .filter((r) => {
-      if (!r.enabled) return false;
-      if (!r.days || r.days.length === 0) return true;
-      return r.days.includes(dayName);
-    })
-    .map((r) => ({
-      reminderId: r.id,
-      medicationId: r.medicationId,
-      name: r.medicationName,
-      dosage: r.medicationDosage,
-      time: r.time,
-    }));
-
-  if (items.length > 0) {
-    await setDoc(snapRef, { items, savedAt: serverTimestamp() });
-  }
 }
 
 // ─────────────────────────────────────────────

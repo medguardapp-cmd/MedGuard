@@ -41,14 +41,14 @@ import {
   ReactionsAnalysis,
 } from "../../lib/openaiService";
 import {
+  removeReminderFromTodaySnapshot,
+  upsertReminderSnapshot,
+} from "../../lib/scheduleSnapshot";
+import {
   checkAllInteractions,
   MedicineSearchResult,
   searchMedicines
 } from "../../lib/supabase";
-import {
-  removeReminderFromTodaySnapshot,
-  upsertReminderSnapshot,
-} from "./index";
 
 // ─────────────────────────────────────────────
 // Types
