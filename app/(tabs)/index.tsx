@@ -1,23 +1,36 @@
 // app/(tabs)/index.tsx
 import { Ionicons } from "@expo/vector-icons";
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
+  Alert,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
 import { auth, db } from "../../lib/firebase";
 import { checkAllInteractions } from "../../lib/supabase";
 
-const { width } = Dimensions.get("window");
 const DAY_WIDTH = 50;
 
 // ─────────────────────────────────────────────
@@ -40,9 +53,17 @@ interface Reminder {
   medicationId: string;
   medicationName: string;
   medicationDosage: string;
-  time: string; // "HH:MM"
+  time: string;
   days: string[];
   enabled: boolean;
+}
+
+export interface SnapshotItem {
+  reminderId: string;
+  medicationId: string;
+  name: string;
+  dosage: string;
+  time: string;
 }
 
 interface ScheduleItem {
@@ -52,6 +73,8 @@ interface ScheduleItem {
   dosage: string;
   time: string;
   taken: boolean;
+  missed: boolean;
+  takenLogId?: string;
   hasInteraction: boolean;
   interactionSeverity: "mild" | "severe" | null;
   interactionCount: number;
@@ -64,19 +87,20 @@ interface InteractionInfo {
   description: string;
 }
 
+interface TakenLog {
+  id: string;
+  medicationId: string;
+  reminderId: string;
+  name: string;
+  dosage: string;
+  takenAt: any;
+  dateKey: string;
+}
+
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const FULL_DAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-];
 
 function getInteractionSeverity(description: string): "mild" | "severe" {
   const lower = description?.toLowerCase() || "";
@@ -103,6 +127,122 @@ function formatTime12h(time: string) {
   return `${hour12}:${minutes} ${ampm}`;
 }
 
+export function snapshotKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function dateKey(date: Date): string {
+  return date.toDateString();
+}
+
+// ─────────────────────────────────────────────
+// Snapshot helpers — exported so medications.tsx can call them
+// ─────────────────────────────────────────────
+
+/**
+ * Upsert a single reminder into today's schedule_snapshot.
+ * Call this from medications.tsx whenever a reminder is saved.
+ */
+export async function upsertReminderSnapshot(
+  userId: string,
+  reminder: Reminder,
+  today: Date = new Date(),
+) {
+  const dayName = DAY_NAMES[today.getDay()];
+  const fitsToday =
+    !reminder.days || reminder.days.length === 0
+      ? true
+      : reminder.days.includes(dayName);
+
+  if (!fitsToday || !reminder.enabled) return;
+
+  const sk = snapshotKey(today);
+  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
+  const snapDoc = await getDoc(snapRef);
+
+  const newItem: SnapshotItem = {
+    reminderId: reminder.id,
+    medicationId: reminder.medicationId,
+    name: reminder.medicationName,
+    dosage: reminder.medicationDosage,
+    time: reminder.time,
+  };
+
+  if (snapDoc.exists()) {
+    const existing: SnapshotItem[] = snapDoc.data()?.items ?? [];
+    const updated = existing.filter((i) => i.reminderId !== reminder.id);
+    updated.push(newItem);
+    await setDoc(
+      snapRef,
+      { items: updated, savedAt: serverTimestamp() },
+      { merge: true },
+    );
+  } else {
+    await setDoc(snapRef, { items: [newItem], savedAt: serverTimestamp() });
+  }
+}
+
+/**
+ * Remove a reminder from today's snapshot.
+ * Call this from medications.tsx when a reminder is deleted.
+ * NOTE: We only remove from TODAY — past snapshots are preserved as history.
+ */
+export async function removeReminderFromTodaySnapshot(
+  userId: string,
+  reminderId: string,
+  today: Date = new Date(),
+) {
+  const sk = snapshotKey(today);
+  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
+  const snapDoc = await getDoc(snapRef);
+  if (!snapDoc.exists()) return;
+
+  const existing: SnapshotItem[] = snapDoc.data()?.items ?? [];
+  const updated = existing.filter((i) => i.reminderId !== reminderId);
+  await setDoc(
+    snapRef,
+    { items: updated, savedAt: serverTimestamp() },
+    { merge: true },
+  );
+}
+
+/**
+ * One-time backfill: write today's snapshot from current reminders.
+ * Only runs if the snapshot doesn't exist yet.
+ */
+async function backfillTodaySnapshot(
+  userId: string,
+  reminders: Reminder[],
+  today: Date,
+) {
+  const sk = snapshotKey(today);
+  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
+  const snapDoc = await getDoc(snapRef);
+  if (snapDoc.exists()) return; // already written
+
+  const dayName = DAY_NAMES[today.getDay()];
+  const items: SnapshotItem[] = reminders
+    .filter((r) => {
+      if (!r.enabled) return false;
+      if (!r.days || r.days.length === 0) return true;
+      return r.days.includes(dayName);
+    })
+    .map((r) => ({
+      reminderId: r.id,
+      medicationId: r.medicationId,
+      name: r.medicationName,
+      dosage: r.medicationDosage,
+      time: r.time,
+    }));
+
+  if (items.length > 0) {
+    await setDoc(snapRef, { items, savedAt: serverTimestamp() });
+  }
+}
+
 // ─────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────
@@ -110,24 +250,35 @@ export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [refreshing, setRefreshing] = useState(false);
 
-  // Firebase data
   const [medications, setMedications] = useState<Medication[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [takenMap, setTakenMap] = useState<Record<string, boolean>>({});
+  const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
 
-  // Interactions
+  // snapshots cache: { "2026-01-15": SnapshotItem[] }
+  const [snapshots, setSnapshots] = useState<Record<string, SnapshotItem[]>>(
+    {},
+  );
+
   const [interactions, setInteractions] = useState<InteractionInfo[]>([]);
   const [loadingInteractions, setLoadingInteractions] = useState(false);
   const [interactionsLoaded, setInteractionsLoaded] = useState(false);
 
-  // Schedule for selected date
   const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
 
+  const [quickTakeVisible, setQuickTakeVisible] = useState(false);
+  const [quickTakeForm, setQuickTakeForm] = useState({
+    medicationId: "",
+    name: "",
+    dosage: "",
+    time: "",
+  });
+
   const scrollViewRef = useRef<ScrollView>(null);
+  const backfillDone = useRef(false);
   const today = new Date();
   const isTodaySelected = selectedDate.toDateString() === today.toDateString();
 
-  // ─── Generate calendar days ───────────────────
+  // ─── Calendar days ────────────────────────────
   const generateDays = () => {
     const days = [];
     const startDate = new Date(today);
@@ -141,13 +292,12 @@ export default function HomeScreen() {
   };
   const days = generateDays();
 
-  // ─── Auto-scroll to today ─────────────────────
   useEffect(() => {
     const timer = setTimeout(() => scrollToToday(), 100);
     return () => clearTimeout(timer);
   }, []);
 
-  // ─── Firebase: Load medications + reminders ───
+  // ─── Firebase listeners ───────────────────────
   useEffect(() => {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
@@ -158,37 +308,69 @@ export default function HomeScreen() {
         orderBy("createdAt", "desc"),
       ),
       (snap) => {
-        const meds = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Medication[];
-        setMedications(meds);
-        setInteractionsLoaded(false); // re-check interactions when meds change
+        setMedications(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Medication[],
+        );
+        setInteractionsLoaded(false);
       },
     );
 
     const unsubReminders = onSnapshot(
       collection(db, "users", userId, "reminders"),
       (snap) => {
-        const rems = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Reminder[];
-        setReminders(rems);
+        setReminders(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Reminder[],
+        );
       },
     );
+
+    const unsubTaken = onSnapshot(
+      collection(db, "users", userId, "taken_logs"),
+      (snap) => {
+        setTakenLogs(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() })) as TakenLog[],
+        );
+      },
+    );
+
+    // Load snapshots for past 15 days into local cache
+    const loadSnapshots = async () => {
+      const cache: Record<string, SnapshotItem[]> = {};
+      await Promise.all(
+        Array.from({ length: 15 }, (_, i) => {
+          const d = new Date(today);
+          d.setDate(today.getDate() - (i + 1));
+          const sk = snapshotKey(d);
+          return getDoc(
+            doc(db, "users", userId, "schedule_snapshots", sk),
+          ).then((snap) => {
+            if (snap.exists()) cache[sk] = snap.data()?.items ?? [];
+          });
+        }),
+      );
+      setSnapshots(cache);
+    };
+    loadSnapshots();
 
     return () => {
       unsubMeds();
       unsubReminders();
+      unsubTaken();
     };
   }, []);
 
-  // ─── Load interactions once meds are ready ────
+  // ─── One-time backfill for today ──────────────
   useEffect(() => {
-    if (!interactionsLoaded && medications.length > 0) {
-      loadInteractions();
-    }
+    if (backfillDone.current || reminders.length === 0) return;
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+    backfillDone.current = true;
+    backfillTodaySnapshot(userId, reminders, today).catch(console.warn);
+  }, [reminders]);
+
+  // ─── Load interactions ────────────────────────
+  useEffect(() => {
+    if (!interactionsLoaded && medications.length > 0) loadInteractions();
   }, [medications, interactionsLoaded]);
 
   const loadInteractions = async () => {
@@ -209,7 +391,6 @@ export default function HomeScreen() {
       }
     }
 
-    // Deduplicate pairs
     const seen = new Set<string>();
     const deduped = allInteractions.filter((w) => {
       const key = [w.drug_id, w.interacts_with].sort().join("-");
@@ -223,42 +404,83 @@ export default function HomeScreen() {
     setInteractionsLoaded(true);
   };
 
-  // ─── Build schedule for selected date ─────────
+  // ─── Build schedule ───────────────────────────
   useEffect(() => {
     buildSchedule(selectedDate);
-  }, [selectedDate, reminders, medications, interactions, takenMap]);
+  }, [
+    selectedDate,
+    reminders,
+    medications,
+    interactions,
+    takenLogs,
+    snapshots,
+  ]);
 
   const buildSchedule = (date: Date) => {
-    const dayName = DAY_NAMES[date.getDay()]; // e.g. "Mon"
-    const isPast = date < new Date(today.toDateString());
-    const isFuture = date > new Date(today.toDateString());
+    const dk = dateKey(date);
+    const sk = snapshotKey(date);
+    const dayName = DAY_NAMES[date.getDay()];
+    const isPastDay = date < new Date(today.toDateString());
+    const isTodayDay = date.toDateString() === today.toDateString();
+    const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
 
-    // Get reminders that fire on this day
-    const getOneTimeDate = (r: Reminder) => {
-      const now = new Date();
-      const [hours, minutes] = r.time.split(":").map(Number);
-      const candidate = new Date();
-      candidate.setHours(hours, minutes, 0, 0);
-      // If time has already passed today, it fires tomorrow
-      if (candidate <= now) candidate.setDate(candidate.getDate() + 1);
-      return candidate;
-    };
+    if (isPastDay) {
+      // ── Past: build from snapshot, cross-reference taken_logs ──
+      const snapshotItems = snapshots[sk] ?? [];
 
+      const scheduledItems: ScheduleItem[] = snapshotItems.map((s) => {
+        const takenLog = logsForDate.find((l) => l.reminderId === s.reminderId);
+        return {
+          reminderId: s.reminderId,
+          medicationId: s.medicationId,
+          name: s.name,
+          dosage: s.dosage,
+          time: s.time,
+          taken: !!takenLog,
+          missed: !takenLog,
+          takenLogId: takenLog?.id,
+          hasInteraction: false,
+          interactionSeverity: null,
+          interactionCount: 0,
+        };
+      });
+
+      // Also show quick-takes that aren't in the snapshot
+      const quickTakes: ScheduleItem[] = logsForDate
+        .filter((l) => l.reminderId === "quick-take")
+        .map((l) => ({
+          reminderId: l.id,
+          medicationId: l.medicationId,
+          name: l.name,
+          dosage: l.dosage,
+          time: l.takenAt?.toDate
+            ? l.takenAt.toDate().toTimeString().slice(0, 5)
+            : "00:00",
+          taken: true,
+          missed: false,
+          takenLogId: l.id,
+          hasInteraction: false,
+          interactionSeverity: null,
+          interactionCount: 0,
+        }));
+
+      const all = [...scheduledItems, ...quickTakes];
+      all.sort((a, b) => a.time.localeCompare(b.time));
+      setSchedule(all);
+      return;
+    }
+
+    // ── Today / Future: use live reminders ──
     const dayReminders = reminders.filter((r) => {
       if (!r.enabled) return false;
-      if (!r.days || r.days.length === 0) {
-        // One-time: only show on its scheduled fire date
-        const fireDate = getOneTimeDate(r);
-        return fireDate.toDateString() === date.toDateString();
-      }
+      if (!r.days || r.days.length === 0) return isTodayDay;
       return r.days.includes(dayName);
     });
 
     const items: ScheduleItem[] = dayReminders.map((r) => {
       const med = medications.find((m) => m.id === r.medicationId);
 
-      // Check if this med has interactions with other meds on the same day
-      const sameDayMedIds = dayReminders
+      const sameDayDrugIds = dayReminders
         .filter((dr) => dr.medicationId !== r.medicationId)
         .map((dr) => medications.find((m) => m.id === dr.medicationId)?.drug_id)
         .filter(Boolean) as string[];
@@ -266,14 +488,15 @@ export default function HomeScreen() {
       const medInteractions = interactions.filter(
         (i) =>
           (i.drug_id === med?.drug_id &&
-            sameDayMedIds.includes(i.interacts_with)) ||
+            sameDayDrugIds.includes(i.interacts_with)) ||
           (i.interacts_with === med?.drug_id &&
-            sameDayMedIds.includes(i.drug_id)),
+            sameDayDrugIds.includes(i.drug_id)),
       );
 
       const hasSevere = medInteractions.some(
         (i) => getInteractionSeverity(i.description) === "severe",
       );
+      const takenLog = logsForDate.find((l) => l.reminderId === r.id);
 
       return {
         reminderId: r.id,
@@ -281,9 +504,9 @@ export default function HomeScreen() {
         name: r.medicationName,
         dosage: r.medicationDosage,
         time: r.time,
-        taken: isPast
-          ? true
-          : takenMap[`${date.toDateString()}-${r.id}`] || false,
+        taken: !!takenLog,
+        missed: false,
+        takenLogId: takenLog?.id,
         hasInteraction: medInteractions.length > 0,
         interactionSeverity:
           medInteractions.length > 0 ? (hasSevere ? "severe" : "mild") : null,
@@ -291,30 +514,96 @@ export default function HomeScreen() {
       };
     });
 
-    // Sort by time
     items.sort((a, b) => a.time.localeCompare(b.time));
     setSchedule(items);
   };
 
-  const toggleTaken = async (reminderId: string) => {
-    const key = `${selectedDate.toDateString()}-${reminderId}`;
-    const nowTaken = !takenMap[key];
-    setTakenMap((prev) => ({ ...prev, [key]: nowTaken }));
+  // ─── Toggle taken ─────────────────────────────
+  const toggleTaken = async (item: ScheduleItem) => {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
 
-    // Auto-disable one-time reminders when marked taken
-    if (nowTaken) {
-      const reminder = reminders.find((r) => r.id === reminderId);
+    if (item.taken && item.takenLogId) {
+      Alert.alert(
+        "Undo taken?",
+        "This will mark this medication as not taken.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Undo",
+            style: "destructive",
+            onPress: async () => {
+              await deleteDoc(
+                doc(db, "users", userId, "taken_logs", item.takenLogId!),
+              );
+            },
+          },
+        ],
+      );
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, "users", userId, "taken_logs"), {
+        medicationId: item.medicationId,
+        reminderId: item.reminderId,
+        name: item.name,
+        dosage: item.dosage,
+        takenAt: serverTimestamp(),
+        dateKey: dateKey(selectedDate),
+      });
+
+      const reminder = reminders.find((r) => r.id === item.reminderId);
       if (reminder && (!reminder.days || reminder.days.length === 0)) {
-        const userId = auth.currentUser?.uid;
-        if (userId) {
-          await updateDoc(doc(db, "users", userId, "reminders", reminderId), {
+        await updateDoc(
+          doc(db, "users", userId, "reminders", item.reminderId),
+          {
             enabled: false,
-          });
-        }
+          },
+        );
       }
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to mark as taken");
     }
   };
 
+  // ─── Quick Take ───────────────────────────────
+  const openQuickTake = (med?: Medication) => {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    setQuickTakeForm({
+      medicationId: med?.id ?? "",
+      name: med?.name ?? "",
+      dosage: med?.dosage ?? "",
+      time: `${hh}:${mm}`,
+    });
+    setQuickTakeVisible(true);
+  };
+
+  const submitQuickTake = async () => {
+    if (!quickTakeForm.name.trim()) {
+      Alert.alert("Error", "Please enter a medication name");
+      return;
+    }
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+    try {
+      await addDoc(collection(db, "users", userId, "taken_logs"), {
+        medicationId: quickTakeForm.medicationId || null,
+        reminderId: "quick-take",
+        name: quickTakeForm.name.trim(),
+        dosage: quickTakeForm.dosage.trim(),
+        takenAt: serverTimestamp(),
+        dateKey: dateKey(selectedDate),
+      });
+      setQuickTakeVisible(false);
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to log");
+    }
+  };
+
+  // ─── Navigation ───────────────────────────────
   const scrollToToday = () => {
     const todayIndex = days.findIndex(
       (d) => d.toDateString() === today.toDateString(),
@@ -331,7 +620,6 @@ export default function HomeScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setInteractionsLoaded(false);
-    setTakenMap({});
     scrollToToday();
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
@@ -353,17 +641,49 @@ export default function HomeScreen() {
 
   const getDayLabel = (date: Date) => {
     if (isToday(date)) return "Today's Medications";
-    if (isPast(date)) return `${formatDate(date)}`;
+    if (isPast(date)) return formatDate(date);
     return `Upcoming — ${formatDate(date)}`;
   };
 
-  // ─── Interaction summary for header ───────────
+  // Dot status per calendar day
+  const getDotStatus = (date: Date): "none" | "grey" | "green" | "red" => {
+    const dayName = DAY_NAMES[date.getDay()];
+
+    if (isPast(date)) {
+      const sk = snapshotKey(date);
+      const snapshotItems = snapshots[sk] ?? [];
+      if (snapshotItems.length === 0) return "none";
+      const dk = dateKey(date);
+      const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
+      const anyMissed = snapshotItems.some(
+        (s) => !logsForDate.find((l) => l.reminderId === s.reminderId),
+      );
+      return anyMissed ? "red" : "green";
+    }
+
+    const hasScheduled = reminders.some(
+      (r) =>
+        r.enabled &&
+        (r.days?.includes(dayName) ||
+          ((!r.days || r.days.length === 0) && isToday(date))),
+    );
+    return hasScheduled ? "grey" : "none";
+  };
+
+  const dotColorValue = (status: ReturnType<typeof getDotStatus>) => {
+    if (status === "green") return Colors.success;
+    if (status === "red") return Colors.error;
+    return "rgba(255,255,255,0.7)";
+  };
+
   const severeCount = interactions.filter(
     (i) => getInteractionSeverity(i.description) === "severe",
   ).length;
   const mildCount = interactions.length - severeCount;
 
-  // ─── Render ───────────────────────────────────
+  // ─────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
       {/* Top Header */}
@@ -415,7 +735,7 @@ export default function HomeScreen() {
               <Ionicons
                 name="today"
                 size={20}
-                color={isTodaySelected ? Colors.primary : Colors.textTertiary}
+                color={isTodaySelected ? Colors.primary : Colors.surface}
               />
               <Text
                 style={[
@@ -442,11 +762,7 @@ export default function HomeScreen() {
             decelerationRate="fast"
           >
             {days.map((date, index) => {
-              // Show dot if there are reminders on this day
-              const dayName = DAY_NAMES[date.getDay()];
-              const hasReminders = reminders.some(
-                (r) => r.enabled && r.days.includes(dayName),
-              );
+              const dotStatus = getDotStatus(date);
               return (
                 <TouchableOpacity
                   key={index}
@@ -475,11 +791,16 @@ export default function HomeScreen() {
                   >
                     {date.getDate()}
                   </Text>
-                  {hasReminders && (
+                  {dotStatus !== "none" && (
                     <View
                       style={[
                         styles.reminderDot,
-                        isSelected(date) && styles.reminderDotSelected,
+                        {
+                          backgroundColor:
+                            isSelected(date) && dotStatus === "grey"
+                              ? Colors.primary
+                              : dotColorValue(dotStatus),
+                        },
                       ]}
                     />
                   )}
@@ -538,7 +859,7 @@ export default function HomeScreen() {
                 <Text style={styles.futureBadgeText}>Upcoming</Text>
               </View>
             )}
-            {isPast(selectedDate) && !isToday(selectedDate) && (
+            {isPast(selectedDate) && (
               <View style={styles.pastBadge}>
                 <Text style={styles.pastBadgeText}>Past</Text>
               </View>
@@ -555,23 +876,36 @@ export default function HomeScreen() {
             <View style={styles.medicationsCard}>
               {schedule.map((item, index) => (
                 <View
-                  key={item.reminderId}
+                  key={item.reminderId + index}
                   style={[
                     styles.medicationItem,
                     index === schedule.length - 1 && styles.medicationItemLast,
+                    item.missed && styles.medicationItemMissed,
                   ]}
                 >
-                  {/* Time column */}
+                  {/* Time */}
                   <View style={styles.timeColumn}>
-                    <Text style={styles.medTime}>
+                    <Text
+                      style={[
+                        styles.medTime,
+                        item.missed && styles.medTimeMissed,
+                      ]}
+                    >
                       {formatTime12h(item.time)}
                     </Text>
                   </View>
 
-                  {/* Info column */}
+                  {/* Info */}
                   <View style={styles.medInfo}>
                     <View style={styles.medNameRow}>
-                      <Text style={styles.medName}>{item.name}</Text>
+                      <Text
+                        style={[
+                          styles.medName,
+                          item.missed && styles.medNameMissed,
+                        ]}
+                      >
+                        {item.name}
+                      </Text>
                       {item.taken && (
                         <View style={styles.takenBadge}>
                           <Ionicons
@@ -582,10 +916,25 @@ export default function HomeScreen() {
                           <Text style={styles.takenBadgeText}>Taken</Text>
                         </View>
                       )}
+                      {item.missed && (
+                        <View style={styles.missedBadge}>
+                          <Ionicons
+                            name="close"
+                            size={12}
+                            color={Colors.error}
+                          />
+                          <Text style={styles.missedBadgeText}>Missed</Text>
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.medDosage}>{item.dosage}</Text>
-
-                    {/* Interaction tags */}
+                    <Text
+                      style={[
+                        styles.medDosage,
+                        item.missed && styles.medDosageMissed,
+                      ]}
+                    >
+                      {item.dosage}
+                    </Text>
                     {item.hasInteraction && (
                       <View style={styles.tagRow}>
                         <View
@@ -629,14 +978,14 @@ export default function HomeScreen() {
                     )}
                   </View>
 
-                  {/* Take button — only for today */}
-                  {isToday(selectedDate) && (
+                  {/* Right side */}
+                  {isTodaySelected && (
                     <TouchableOpacity
                       style={[
                         styles.takeButton,
                         item.taken && styles.takenButton,
                       ]}
-                      onPress={() => toggleTaken(item.reminderId)}
+                      onPress={() => toggleTaken(item)}
                     >
                       <Text
                         style={[
@@ -648,19 +997,17 @@ export default function HomeScreen() {
                       </Text>
                     </TouchableOpacity>
                   )}
-
-                  {/* Past — show as taken */}
                   {isPast(selectedDate) && (
                     <View style={styles.pastTakenBadge}>
                       <Ionicons
-                        name="checkmark-circle"
-                        size={20}
-                        color={Colors.success}
+                        name={item.taken ? "checkmark-circle" : "close-circle"}
+                        size={22}
+                        color={
+                          item.taken ? Colors.success : Colors.error + "80"
+                        }
                       />
                     </View>
                   )}
-
-                  {/* Future — show clock */}
                   {isFuture(selectedDate) && (
                     <View style={styles.futureIcon}>
                       <Ionicons
@@ -681,12 +1028,23 @@ export default function HomeScreen() {
                 color={Colors.textTertiary}
               />
               <Text style={styles.noMedicationsText}>
-                {isFuture(selectedDate)
-                  ? "No medications scheduled for this day"
-                  : isToday(selectedDate)
-                    ? "No medications scheduled for today"
-                    : "No medications were scheduled for this day"}
+                {isPast(selectedDate)
+                  ? "No medications were scheduled or taken on this day"
+                  : isFuture(selectedDate)
+                    ? "No medications scheduled for this day"
+                    : "No medications scheduled for today"}
               </Text>
+              {isTodaySelected && (
+                <TouchableOpacity
+                  style={[
+                    styles.takeButton,
+                    { marginTop: 16, paddingHorizontal: 20 },
+                  ]}
+                  onPress={() => openQuickTake()}
+                >
+                  <Text style={styles.takeButtonText}>Log a dose</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -705,22 +1063,28 @@ export default function HomeScreen() {
               <View
                 style={[styles.actionIcon, { backgroundColor: Colors.warning }]}
               >
-                <Ionicons name="scan" size={28} color={Colors.surface} />
+                <Ionicons name="clipboard" size={28} color={Colors.surface} />
               </View>
-              <Text style={styles.actionText}>Scan</Text>
+              <Text style={styles.actionText}>Log Reaction</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionButton}>
               <View
-                style={[
-                  styles.actionIcon,
-                  { backgroundColor: Colors.accentDark },
-                ]}
+                style={[styles.actionIcon, { backgroundColor: Colors.primary }]}
               >
-                <Ionicons name="chatbubble" size={28} color={Colors.text} />
+                <Ionicons name="alarm" size={28} color={Colors.surface} />
               </View>
-              <Text style={styles.actionText}>Ask AI</Text>
+              <Text style={styles.actionText}>Add Reminder</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() =>
+                Alert.alert(
+                  "🚨 Emergency",
+                  "If this is a medical emergency, call emergency services immediately.\n\nEmergency: 911\nPoison Control: 1-800-222-1222",
+                  [{ text: "OK" }],
+                )
+              }
+            >
               <View
                 style={[styles.actionIcon, { backgroundColor: Colors.error }]}
               >
@@ -734,13 +1098,139 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Log a Dose chips */}
+          {isTodaySelected &&
+            medications.filter((m) => m.active).length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Log a Dose</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.quickTakeScroll}
+                >
+                  {medications
+                    .filter((m) => m.active)
+                    .map((med) => (
+                      <TouchableOpacity
+                        key={med.id}
+                        style={styles.quickTakeChip}
+                        onPress={() => openQuickTake(med)}
+                      >
+                        <Ionicons
+                          name="medical"
+                          size={14}
+                          color={Colors.primary}
+                        />
+                        <Text
+                          style={styles.quickTakeChipText}
+                          numberOfLines={1}
+                        >
+                          {med.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  <TouchableOpacity
+                    style={[styles.quickTakeChip, { borderStyle: "dashed" }]}
+                    onPress={() => openQuickTake()}
+                  >
+                    <Ionicons
+                      name="add"
+                      size={14}
+                      color={Colors.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.quickTakeChipText,
+                        { color: Colors.textSecondary },
+                      ]}
+                    >
+                      Other
+                    </Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              </>
+            )}
+
           <View style={{ height: 20 }} />
         </View>
       </ScrollView>
+
+      {/* Quick Take Modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={quickTakeVisible}
+        onRequestClose={() => setQuickTakeVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Log a Dose</Text>
+              <TouchableOpacity onPress={() => setQuickTakeVisible(false)}>
+                <Ionicons name="close" size={24} color={Colors.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Medication</Text>
+              <TextInput
+                style={styles.input}
+                value={quickTakeForm.name}
+                onChangeText={(t) =>
+                  setQuickTakeForm((p) => ({ ...p, name: t }))
+                }
+                placeholder="e.g. Paracetamol / Biogesic"
+                placeholderTextColor={Colors.textTertiary}
+              />
+            </View>
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Dosage</Text>
+              <TextInput
+                style={styles.input}
+                value={quickTakeForm.dosage}
+                onChangeText={(t) =>
+                  setQuickTakeForm((p) => ({ ...p, dosage: t }))
+                }
+                placeholder="e.g. 500mg, 1 tablet"
+                placeholderTextColor={Colors.textTertiary}
+              />
+            </View>
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Time taken</Text>
+              <TextInput
+                style={styles.input}
+                value={quickTakeForm.time}
+                onChangeText={(t) =>
+                  setQuickTakeForm((p) => ({ ...p, time: t }))
+                }
+                placeholder="HH:MM"
+                placeholderTextColor={Colors.textTertiary}
+                keyboardType="numbers-and-punctuation"
+              />
+            </View>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setQuickTakeVisible(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={submitQuickTake}
+              >
+                <Text style={styles.saveButtonText}>Log Dose</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+// ─────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   mainHeader: {
@@ -823,14 +1313,7 @@ const styles = StyleSheet.create({
   dayNumber: { fontSize: 18, fontWeight: "bold", color: Colors.surface },
   todayDayText: { color: Colors.surface },
   selectedText: { color: Colors.primary },
-  reminderDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.7)",
-    marginTop: 3,
-  },
-  reminderDotSelected: { backgroundColor: Colors.primary },
+  reminderDot: { width: 5, height: 5, borderRadius: 3, marginTop: 3 },
   content: { paddingTop: 10 },
   selectedDateContainer: {
     paddingHorizontal: 20,
@@ -864,8 +1347,6 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontWeight: "600",
   },
-
-  // Interaction banner
   interactionBanner: {
     marginHorizontal: 16,
     marginBottom: 12,
@@ -888,8 +1369,6 @@ const styles = StyleSheet.create({
   bannerText: { flex: 1 },
   bannerTitle: { fontSize: 14, fontWeight: "700" },
   bannerSubtitle: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-
-  // Schedule card
   loadingCard: {
     marginHorizontal: 16,
     marginBottom: 16,
@@ -922,8 +1401,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   medicationItemLast: { borderBottomWidth: 0 },
+  medicationItemMissed: { backgroundColor: Colors.error + "06" },
   timeColumn: { width: 64, alignItems: "flex-start" },
   medTime: { fontSize: 13, fontWeight: "600", color: Colors.primary },
+  medTimeMissed: { color: Colors.textTertiary },
   medInfo: { flex: 1 },
   medNameRow: {
     flexDirection: "row",
@@ -932,7 +1413,9 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   medName: { fontSize: 15, fontWeight: "600", color: Colors.text },
+  medNameMissed: { color: Colors.textSecondary },
   medDosage: { fontSize: 13, color: Colors.textSecondary, marginTop: 1 },
+  medDosageMissed: { color: Colors.textTertiary },
   takenBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -943,6 +1426,16 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   takenBadgeText: { fontSize: 11, color: Colors.success, fontWeight: "600" },
+  missedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    backgroundColor: Colors.error + "15",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  missedBadgeText: { fontSize: 11, color: Colors.error, fontWeight: "600" },
   tagRow: { flexDirection: "row", gap: 6, marginTop: 4, flexWrap: "wrap" },
   interactionTag: {
     flexDirection: "row",
@@ -986,14 +1479,13 @@ const styles = StyleSheet.create({
     marginTop: 16,
     lineHeight: 22,
   },
-
-  // Quick actions
   sectionTitle: {
     fontSize: 18,
     fontWeight: "bold",
     color: Colors.text,
     marginHorizontal: 16,
     marginBottom: 12,
+    marginTop: 4,
   },
   actionsContainer: {
     flexDirection: "row",
@@ -1010,5 +1502,72 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  actionText: { fontSize: 12, color: Colors.text },
+  actionText: { fontSize: 12, color: Colors.text, textAlign: "center" },
+  quickTakeScroll: { paddingHorizontal: 16, paddingBottom: 16, gap: 8 },
+  quickTakeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.primary + "40",
+    backgroundColor: Colors.primary + "08",
+  },
+  quickTakeChipText: {
+    fontSize: 13,
+    color: Colors.primary,
+    fontWeight: "500",
+    maxWidth: 100,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  modalTitle: { fontSize: 20, fontWeight: "bold", color: Colors.text },
+  formGroup: { marginBottom: 16 },
+  label: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: Colors.text,
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: Colors.text,
+  },
+  modalFooter: { flexDirection: "row", gap: 12, marginTop: 8 },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  cancelButton: {
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  saveButton: { backgroundColor: Colors.primary },
+  cancelButtonText: { color: Colors.text, fontSize: 16, fontWeight: "600" },
+  saveButtonText: { color: Colors.surface, fontSize: 16, fontWeight: "600" },
 });

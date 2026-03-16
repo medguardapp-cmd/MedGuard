@@ -33,11 +33,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
 import { auth, db } from "../../lib/firebase";
 import {
+  AICommunityReport,
+  AIInteraction,
+  AIProfileWarning,
+  AISideEffect,
+  generateReactionsAnalysis,
+  ReactionsAnalysis,
+} from "../../lib/openaiService";
+import {
   checkAllInteractions,
-  getDrugById,
   MedicineSearchResult,
-  searchMedicines,
+  searchMedicines
 } from "../../lib/supabase";
+import {
+  removeReminderFromTodaySnapshot,
+  upsertReminderSnapshot,
+} from "./index";
 
 // ─────────────────────────────────────────────
 // Types
@@ -94,6 +105,21 @@ interface SymptomLog {
   logged_at: any;
 }
 
+// ─────────────────────────────────────────────
+// Helpers for AI reactions tab
+// ─────────────────────────────────────────────
+const warningColor = (severity: "info" | "caution" | "danger") => {
+  if (severity === "danger") return Colors.error;
+  if (severity === "caution") return Colors.warning;
+  return Colors.primary;
+};
+
+const interactionColor = (severity: "mild" | "moderate" | "severe") => {
+  if (severity === "severe") return Colors.error;
+  if (severity === "moderate") return Colors.warning;
+  return Colors.success;
+};
+
 export default function MedicationsScreen() {
   // ─── State ───────────────────────────────────
   const [medications, setMedications] = useState<Medication[]>([]);
@@ -147,16 +173,12 @@ export default function MedicationsScreen() {
   const [showMedicationSelector, setShowMedicationSelector] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
-  // ─── Reactions tab state ──────────────────────
-  const [knownInteractions, setKnownInteractions] = useState<
-    InteractionWarning[]
-  >([]);
-  const [knownSideEffects, setKnownSideEffects] = useState<KnownSideEffect[]>(
-    [],
-  );
+  // ─── Reactions tab state (UPDATED) ───────────
+  const [aiAnalysis, setAiAnalysis] = useState<ReactionsAnalysis | null>(null);
   const [symptomLogs, setSymptomLogs] = useState<SymptomLog[]>([]);
   const [loadingReactions, setLoadingReactions] = useState(false);
   const [reactionsLoaded, setReactionsLoaded] = useState(false);
+  const [reactionsError, setReactionsError] = useState<string | null>(null);
 
   // Log symptom modal state
   const [logModalVisible, setLogModalVisible] = useState(false);
@@ -204,7 +226,7 @@ export default function MedicationsScreen() {
         })) as Medication[];
         setMedications(meds);
         setLoading(false);
-        setReactionsLoaded(false); // re-fetch reactions when meds change
+        setReactionsLoaded(false);
       },
       (error) => {
         console.error("Firestore error:", error);
@@ -251,60 +273,33 @@ export default function MedicationsScreen() {
     }
   }, [activeTab, reactionsLoaded]);
 
+  // ─── loadReactionsData (UPDATED — uses AI) ────
   const loadReactionsData = async () => {
-    setLoadingReactions(true);
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
 
-    const activeMeds = medications.filter((m) => m.active && m.drug_id);
-    if (activeMeds.length === 0) {
-      setKnownInteractions([]);
-      setKnownSideEffects([]);
+    setLoadingReactions(true);
+    setReactionsError(null);
+
+    const activeMeds = medications.filter((m) => m.active);
+    if (!activeMeds.length) {
+      setAiAnalysis(null);
       setLoadingReactions(false);
       setReactionsLoaded(true);
       return;
     }
 
-    // 1. Check all interaction pairs between current medications
-    const allInteractions: InteractionWarning[] = [];
-    for (let i = 0; i < activeMeds.length; i++) {
-      const otherIds = activeMeds
-        .filter((_, j) => j !== i)
-        .map((m) => m.drug_id);
-      if (otherIds.length > 0) {
-        const warnings = await checkAllInteractions(
-          activeMeds[i].drug_id,
-          otherIds,
-        );
-        allInteractions.push(...warnings);
-      }
+    try {
+      const analysis = await generateReactionsAnalysis(userId, activeMeds);
+      setAiAnalysis(analysis);
+    } catch (err: any) {
+      setReactionsError(
+        err.message || "Failed to generate analysis. Please try again.",
+      );
+    } finally {
+      setLoadingReactions(false);
+      setReactionsLoaded(true);
     }
-
-    // Deduplicate by pair (A↔B and B↔A are the same)
-    const seen = new Set<string>();
-    const dedupedInteractions = allInteractions.filter((w) => {
-      const key = [w.drug_id, w.interacts_with].sort().join("-");
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    setKnownInteractions(dedupedInteractions);
-
-    // 2. Fetch side effects for each active medication
-    const sideEffects: KnownSideEffect[] = [];
-    for (const med of activeMeds) {
-      const drug = await getDrugById(med.drug_id);
-      if (drug) {
-        sideEffects.push({
-          medicationId: med.id,
-          medicationName: med.name,
-          toxicity: drug.toxicity || null,
-          pharmacodynamics: drug.pharmacodynamics || null,
-        });
-      }
-    }
-    setKnownSideEffects(sideEffects);
-
-    setLoadingReactions(false);
-    setReactionsLoaded(true);
   };
 
   // ─── Log symptom ──────────────────────────────
@@ -584,6 +579,8 @@ export default function MedicationsScreen() {
           const userId = auth.currentUser?.uid;
           if (!userId) return;
           await deleteDoc(doc(db, "users", userId, "reminders", id));
+          // Remove from TODAY's snapshot only — past snapshots are preserved as history
+          await removeReminderFromTodaySnapshot(userId, id).catch(console.warn);
         },
       },
     ]);
@@ -618,17 +615,32 @@ export default function MedicationsScreen() {
       label: reminderFormData.label || null,
     };
     try {
+      let savedReminderId = editingReminder?.id ?? "";
       if (editingReminder) {
         await updateDoc(
           doc(db, "users", userId, "reminders", editingReminder.id),
           reminderData,
         );
+        savedReminderId = editingReminder.id;
       } else {
-        await addDoc(
+        const docRef = await addDoc(
           collection(db, "users", userId, "reminders"),
           reminderData,
         );
+        savedReminderId = docRef.id;
       }
+      // Write this reminder into today's schedule_snapshot
+      await upsertReminderSnapshot(userId, {
+        id: savedReminderId,
+        medicationId: reminderData.medicationId,
+        medicationName: reminderData.medicationName,
+        medicationDosage: reminderData.medicationDosage,
+        time: reminderData.time,
+        days: reminderData.days,
+        enabled: reminderData.enabled,
+        sound: reminderData.sound,
+        vibrate: reminderData.vibrate,
+      }).catch(console.warn);
       setReminderModalVisible(false);
       setShowMedicationSelector(false);
       setSelectedMedicationForReminder(null);
@@ -798,10 +810,11 @@ export default function MedicationsScreen() {
           >
             Reactions
           </Text>
-          {knownInteractions.length > 0 && (
+          {/* UPDATED: badge now shows AI interaction count */}
+          {(aiAnalysis?.interactions?.length ?? 0) > 0 && (
             <View style={styles.tabBadge}>
               <Text style={styles.tabBadgeText}>
-                {knownInteractions.length}
+                {aiAnalysis!.interactions.length}
               </Text>
             </View>
           )}
@@ -1060,17 +1073,144 @@ export default function MedicationsScreen() {
           </View>
         )}
 
-        {/* ── Reactions Tab ── */}
+        {/* ── Reactions Tab (UPDATED) ── */}
         {activeTab === "reactions" && (
           <View>
             {loadingReactions ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={Colors.primary} />
-                <Text style={styles.loadingText}>Checking interactions...</Text>
+                <Text style={styles.loadingText}>
+                  Analyzing your medications with AI...
+                </Text>
+                <Text
+                  style={[styles.loadingText, { fontSize: 13, marginTop: 4 }]}
+                >
+                  Checking your profile, community reports, and interactions
+                </Text>
+              </View>
+            ) : reactionsError ? (
+              <View style={styles.reactionEmptyCard}>
+                <Ionicons
+                  name="warning-outline"
+                  size={32}
+                  color={Colors.error}
+                />
+                <Text
+                  style={[styles.reactionEmptyText, { color: Colors.error }]}
+                >
+                  {reactionsError}
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyStateButton}
+                  onPress={loadReactionsData}
+                >
+                  <Text style={styles.emptyStateButtonText}>Try Again</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <>
-                {/* Drug Interactions Section */}
+                {/* AI header + refresh */}
+                <View style={[styles.sectionHeader, { marginTop: 0 }]}>
+                  <Ionicons name="sparkles" size={20} color={Colors.primary} />
+                  <Text style={styles.sectionTitle}>AI Analysis</Text>
+                  <TouchableOpacity
+                    onPress={() => setReactionsLoaded(false)}
+                    style={styles.refreshButton}
+                  >
+                    <Ionicons name="refresh" size={18} color={Colors.primary} />
+                  </TouchableOpacity>
+                  {aiAnalysis && (
+                    <Text style={{ fontSize: 11, color: Colors.textTertiary }}>
+                      {aiAnalysis.lastUpdated.toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                  )}
+                </View>
+
+                {/* Overall summary */}
+                {aiAnalysis?.summary ? (
+                  <View
+                    style={[
+                      styles.interactionCard,
+                      { borderLeftColor: Colors.primary, marginBottom: 16 },
+                    ]}
+                  >
+                    <Text style={styles.interactionDescription}>
+                      {aiAnalysis.summary}
+                    </Text>
+                  </View>
+                ) : !aiAnalysis ? (
+                  <View style={styles.reactionEmptyCard}>
+                    <Ionicons
+                      name="medical-outline"
+                      size={32}
+                      color={Colors.textTertiary}
+                    />
+                    <Text style={styles.reactionEmptyText}>
+                      Add medications to see your AI analysis
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* Profile Warnings */}
+                {(aiAnalysis?.profileWarnings?.length ?? 0) > 0 && (
+                  <>
+                    <View style={styles.sectionHeader}>
+                      <Ionicons
+                        name="alert-circle"
+                        size={20}
+                        color={Colors.error}
+                      />
+                      <Text style={styles.sectionTitle}>Profile Warnings</Text>
+                    </View>
+                    {aiAnalysis!.profileWarnings.map(
+                      (w: AIProfileWarning, i: number) => (
+                        <View
+                          key={i}
+                          style={[
+                            styles.interactionCard,
+                            {
+                              borderLeftColor: warningColor(w.severity),
+                              marginBottom: 8,
+                            },
+                          ]}
+                        >
+                          <View style={styles.interactionDrugs}>
+                            <Ionicons
+                              name={
+                                w.severity === "danger"
+                                  ? "warning"
+                                  : w.severity === "caution"
+                                    ? "alert-circle"
+                                    : "information-circle"
+                              }
+                              size={16}
+                              color={warningColor(w.severity)}
+                            />
+                            <Text
+                              style={[
+                                styles.interactionDrugName,
+                                {
+                                  color: warningColor(w.severity),
+                                  textTransform: "capitalize",
+                                },
+                              ]}
+                            >
+                              {w.type} warning
+                            </Text>
+                          </View>
+                          <Text style={styles.interactionDescription}>
+                            {w.warning}
+                          </Text>
+                        </View>
+                      ),
+                    )}
+                  </>
+                )}
+
+                {/* Drug Interactions */}
                 <View style={styles.sectionHeader}>
                   <Ionicons name="git-compare" size={20} color={Colors.error} />
                   <Text style={styles.sectionTitle}>Drug Interactions</Text>
@@ -1082,38 +1222,92 @@ export default function MedicationsScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {knownInteractions.length > 0 ? (
-                  knownInteractions.map((interaction, index) => {
-                    const drugA = medications.find(
-                      (m) => m.drug_id === interaction.drug_id,
-                    );
-                    const drugB = medications.find(
-                      (m) => m.drug_id === interaction.interacts_with,
-                    );
-                    return (
-                      <View key={index} style={styles.interactionCard}>
-                        <View style={styles.interactionDrugs}>
+                {(aiAnalysis?.interactions?.length ?? 0) > 0 ? (
+                  aiAnalysis!.interactions.map(
+                    (interaction: AIInteraction, index: number) => (
+                      <View
+                        key={index}
+                        style={[
+                          styles.interactionCard,
+                          {
+                            borderLeftColor: interactionColor(
+                              interaction.severity,
+                            ),
+                            marginBottom: 10,
+                          },
+                        ]}
+                      >
+                        <View
+                          style={[styles.interactionDrugs, { marginBottom: 6 }]}
+                        >
                           <Text style={styles.interactionDrugName}>
-                            {drugA?.name || interaction.drug_id}
+                            {interaction.drugA}
                           </Text>
                           <Ionicons
                             name="swap-horizontal"
                             size={16}
-                            color={Colors.warning}
+                            color={Colors.textSecondary}
                           />
                           <Text style={styles.interactionDrugName}>
-                            {drugB?.name || interaction.interacts_name}
+                            {interaction.drugB}
                           </Text>
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              {
+                                backgroundColor:
+                                  interactionColor(interaction.severity) + "20",
+                                marginLeft: "auto" as any,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.statusText,
+                                {
+                                  color: interactionColor(interaction.severity),
+                                  textTransform: "capitalize",
+                                },
+                              ]}
+                            >
+                              {interaction.severity}
+                            </Text>
+                          </View>
                         </View>
                         <Text
-                          style={styles.interactionDescription}
-                          numberOfLines={3}
+                          style={[
+                            styles.sideEffectLabel,
+                            {
+                              color: interactionColor(interaction.severity),
+                              marginBottom: 4,
+                            },
+                          ]}
                         >
+                          {interaction.severityReason}
+                        </Text>
+                        <Text style={styles.interactionDescription}>
                           {interaction.description}
                         </Text>
+                        {interaction.recommendation ? (
+                          <View
+                            style={[
+                              styles.refillBadge,
+                              { marginTop: 8, alignSelf: "stretch" as any },
+                            ]}
+                          >
+                            <Ionicons
+                              name="bulb-outline"
+                              size={14}
+                              color={Colors.warning}
+                            />
+                            <Text style={[styles.refillText, { flex: 1 }]}>
+                              {interaction.recommendation}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
-                    );
-                  })
+                    ),
+                  )
                 ) : (
                   <View style={styles.reactionEmptyCard}>
                     <Ionicons
@@ -1127,54 +1321,240 @@ export default function MedicationsScreen() {
                   </View>
                 )}
 
-                {/* Known Side Effects Section */}
+                {/* Side Effects */}
                 <View style={styles.sectionHeader}>
                   <Ionicons name="warning" size={20} color={Colors.warning} />
-                  <Text style={styles.sectionTitle}>Known Side Effects</Text>
+                  <Text style={styles.sectionTitle}>Side Effects</Text>
                 </View>
 
-                {knownSideEffects.length > 0 ? (
-                  knownSideEffects.map((item, index) => (
-                    <View key={index} style={styles.sideEffectCard}>
-                      <Text style={styles.sideEffectMedName}>
-                        {item.medicationName}
-                      </Text>
-                      {item.toxicity && (
-                        <View style={styles.sideEffectSection}>
-                          <Text style={styles.sideEffectLabel}>
-                            Adverse Effects
-                          </Text>
-                          <Text style={styles.sideEffectText} numberOfLines={4}>
-                            {item.toxicity}
-                          </Text>
-                        </View>
-                      )}
-                      {item.pharmacodynamics && (
-                        <View style={styles.sideEffectSection}>
-                          <Text style={styles.sideEffectLabel}>
-                            Pharmacodynamics
-                          </Text>
-                          <Text style={styles.sideEffectText} numberOfLines={3}>
-                            {item.pharmacodynamics}
-                          </Text>
-                        </View>
-                      )}
-                      {!item.toxicity && !item.pharmacodynamics && (
-                        <Text style={styles.sideEffectEmpty}>
-                          No side effect data available
+                {(aiAnalysis?.sideEffects?.length ?? 0) > 0 ? (
+                  aiAnalysis!.sideEffects.map(
+                    (item: AISideEffect, index: number) => (
+                      <View
+                        key={index}
+                        style={[styles.sideEffectCard, { marginBottom: 12 }]}
+                      >
+                        <Text style={styles.sideEffectMedName}>
+                          {item.medicationName}
                         </Text>
-                      )}
-                    </View>
-                  ))
+                        <Text
+                          style={[styles.sideEffectText, { marginBottom: 10 }]}
+                        >
+                          {item.summary}
+                        </Text>
+
+                        {/* Per-medication profile warnings */}
+                        {item.profileWarnings?.map(
+                          (w: AIProfileWarning, wi: number) => (
+                            <View
+                              key={wi}
+                              style={[
+                                styles.warningCard,
+                                {
+                                  backgroundColor:
+                                    warningColor(w.severity) + "12",
+                                  borderLeftColor: warningColor(w.severity),
+                                  marginBottom: 8,
+                                },
+                              ]}
+                            >
+                              <View style={styles.warningHeader}>
+                                <Ionicons
+                                  name={
+                                    w.severity === "danger"
+                                      ? "warning"
+                                      : "alert-circle"
+                                  }
+                                  size={14}
+                                  color={warningColor(w.severity)}
+                                />
+                                <Text
+                                  style={[
+                                    styles.warningDrugName,
+                                    {
+                                      fontSize: 13,
+                                      color: warningColor(w.severity),
+                                    },
+                                  ]}
+                                >
+                                  {w.type.charAt(0).toUpperCase() +
+                                    w.type.slice(1)}{" "}
+                                  alert
+                                </Text>
+                              </View>
+                              <Text
+                                style={[
+                                  styles.warningDescription,
+                                  { fontSize: 12 },
+                                ]}
+                              >
+                                {w.warning}
+                              </Text>
+                            </View>
+                          ),
+                        )}
+
+                        {/* Common side effects */}
+                        {item.common?.length > 0 && (
+                          <View style={styles.sideEffectSection}>
+                            <Text style={styles.sideEffectLabel}>Common</Text>
+                            {item.common.map((se: string, si: number) => (
+                              <View
+                                key={si}
+                                style={{
+                                  flexDirection: "row",
+                                  gap: 6,
+                                  marginBottom: 3,
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    color: Colors.warning,
+                                    fontSize: 12,
+                                  }}
+                                >
+                                  •
+                                </Text>
+                                <Text style={styles.sideEffectText}>{se}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        {/* Serious side effects */}
+                        {item.serious?.length > 0 && (
+                          <View style={styles.sideEffectSection}>
+                            <Text
+                              style={[
+                                styles.sideEffectLabel,
+                                { color: Colors.error },
+                              ]}
+                            >
+                              Serious / Rare
+                            </Text>
+                            {item.serious.map((se: string, si: number) => (
+                              <View
+                                key={si}
+                                style={{
+                                  flexDirection: "row",
+                                  gap: 6,
+                                  marginBottom: 3,
+                                }}
+                              >
+                                <Text
+                                  style={{ color: Colors.error, fontSize: 12 }}
+                                >
+                                  •
+                                </Text>
+                                <Text style={styles.sideEffectText}>{se}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    ),
+                  )
                 ) : (
                   <View style={styles.reactionEmptyCard}>
                     <Text style={styles.reactionEmptyText}>
-                      Add medications to see known side effects
+                      Add medications to see side effect analysis
                     </Text>
                   </View>
                 )}
 
-                {/* User Logged Symptoms Section */}
+                {/* Community Reports */}
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="people" size={20} color={Colors.primary} />
+                  <Text style={styles.sectionTitle}>Community Reports</Text>
+                </View>
+                <View
+                  style={[
+                    styles.reactionEmptyCard,
+                    { backgroundColor: Colors.primary + "08", marginBottom: 8 },
+                  ]}
+                >
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={16}
+                    color={Colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.reactionEmptyText,
+                      { fontSize: 12, color: Colors.primary },
+                    ]}
+                  >
+                    Anonymized reports from users with similar conditions. For
+                    reference only — not medical advice.
+                  </Text>
+                </View>
+
+                {(aiAnalysis?.communityReports?.length ?? 0) > 0 ? (
+                  aiAnalysis!.communityReports.map(
+                    (report: AICommunityReport, index: number) => (
+                      <View
+                        key={index}
+                        style={[styles.logCard, { marginBottom: 8 }]}
+                      >
+                        <View style={styles.logTitleRow}>
+                          <Text style={styles.logSymptom}>
+                            {report.symptom}
+                          </Text>
+                          <View
+                            style={[
+                              styles.severityBadge,
+                              { backgroundColor: Colors.textTertiary + "20" },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.severityText,
+                                { color: Colors.textSecondary },
+                              ]}
+                            >
+                              {report.reportCount} report
+                              {report.reportCount !== 1 ? "s" : ""}
+                            </Text>
+                          </View>
+                          <View
+                            style={[
+                              styles.severityBadge,
+                              { backgroundColor: Colors.warning + "20" },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.severityText,
+                                { color: Colors.warning },
+                              ]}
+                            >
+                              avg {report.avgSeverity.toFixed(1)}/5
+                            </Text>
+                          </View>
+                        </View>
+                        {report.note ? (
+                          <Text style={[styles.logNote, { marginTop: 6 }]}>
+                            {report.note}
+                          </Text>
+                        ) : null}
+                      </View>
+                    ),
+                  )
+                ) : (
+                  <View style={styles.reactionEmptyCard}>
+                    <Ionicons
+                      name="people-outline"
+                      size={32}
+                      color={Colors.textTertiary}
+                    />
+                    <Text style={styles.reactionEmptyText}>
+                      No community data available yet for users with your
+                      conditions
+                    </Text>
+                  </View>
+                )}
+
+                {/* My Symptom Log — unchanged */}
                 <View style={styles.sectionHeader}>
                   <Ionicons name="clipboard" size={20} color={Colors.primary} />
                   <Text style={styles.sectionTitle}>My Symptom Log</Text>
@@ -2144,8 +2524,6 @@ const styles = StyleSheet.create({
   reminderFeatures: { flexDirection: "row", gap: 8 },
   reminderRight: { flexDirection: "row", gap: 12 },
   reminderAction: { padding: 4 },
-
-  // Reactions tab
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -2265,8 +2643,6 @@ const styles = StyleSheet.create({
   },
   logMedsText: { fontSize: 12, color: Colors.textTertiary, flex: 1 },
   logDate: { fontSize: 11, color: Colors.textTertiary },
-
-  // Log symptom modal
   severityContainer: { flexDirection: "row", gap: 8, marginTop: 4 },
   severityButton: {
     flex: 1,
@@ -2299,8 +2675,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   medCheckText: { fontSize: 14, color: Colors.text },
-
-  // Modals
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",

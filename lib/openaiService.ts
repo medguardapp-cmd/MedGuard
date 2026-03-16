@@ -710,3 +710,292 @@ export async function markMedicationTaken(
     console.error("❌ [Firebase] markMedicationTaken:", err.message);
   }
 }
+
+// =============================================================================
+// REACTIONS ANALYSIS
+// Same pattern as chat: getUserProfile + fetchMedicationContext +
+// fetchInteractionContext + community logs -> GPT
+// Used by the Reactions tab in medications.tsx
+// =============================================================================
+
+export interface AISideEffect {
+  medicationName: string;
+  medicationId: string;
+  summary: string;
+  common: string[];
+  serious: string[];
+  profileWarnings: AIProfileWarning[];
+}
+
+export interface AIInteraction {
+  drugA: string;
+  drugB: string;
+  severity: "mild" | "moderate" | "severe";
+  severityReason: string;
+  description: string;
+  recommendation: string;
+}
+
+export interface AIProfileWarning {
+  type: "pregnancy" | "breastfeeding" | "condition" | "age" | "general";
+  warning: string;
+  severity: "info" | "caution" | "danger";
+}
+
+export interface AICommunityReport {
+  symptom: string;
+  reportCount: number;
+  avgSeverity: number;
+  medications: string[];
+  note: string;
+}
+
+export interface ReactionsAnalysis {
+  sideEffects: AISideEffect[];
+  interactions: AIInteraction[];
+  profileWarnings: AIProfileWarning[];
+  communityReports: AICommunityReport[];
+  summary: string;
+  lastUpdated: Date;
+}
+
+// Fetch anonymized symptom logs from users with the same conditions
+async function fetchCommunityLogs(
+  userConditions: string[],
+  currentUid: string,
+): Promise<string> {
+  if (!userConditions.length) return "";
+  try {
+    const usersSnap = await getDocs(collection(db, "users"));
+    const counts: Record<string, { total: number; severitySum: number }> = {};
+
+    for (const userDoc of usersSnap.docs) {
+      if (userDoc.id === currentUid) continue;
+      const data = userDoc.data();
+      const conditions = (data?.medicalData?.conditions ?? []) as string[];
+      const shared = conditions.filter((c) =>
+        userConditions.some((uc) => uc.toLowerCase() === c.toLowerCase()),
+      );
+      if (!shared.length) continue;
+
+      const logsSnap = await getDocs(
+        collection(db, "users", userDoc.id, "symptom_logs"),
+      );
+      for (const logDoc of logsSnap.docs) {
+        const log = logDoc.data();
+        if (!log.symptom) continue;
+        const key = log.symptom.toLowerCase().trim();
+        if (!counts[key]) counts[key] = { total: 0, severitySum: 0 };
+        counts[key].total++;
+        counts[key].severitySum += log.severity ?? 1;
+      }
+    }
+
+    const sorted = Object.entries(counts)
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 10);
+
+    if (!sorted.length) return "";
+    return sorted
+      .map(
+        ([symptom, d]) =>
+          `- "${symptom}": reported ${d.total} time(s), avg severity ${(d.severitySum / d.total).toFixed(1)}/5`,
+      )
+      .join("\n");
+  } catch (err: any) {
+    console.warn("[Community] fetchCommunityLogs:", err.message);
+    return "";
+  }
+}
+
+// generateReactionsAnalysis — call from the Reactions tab
+// Reuses all existing internal helpers (getUserProfile, fetchMedicationContext,
+// fetchInteractionContext, fetchDrugsByIds) — no duplication.
+
+export async function generateReactionsAnalysis(
+  uid: string,
+  medications: MedDoc[],
+): Promise<ReactionsAnalysis> {
+  const activeMeds = medications.filter((m) => m.active !== false && m.drug_id);
+
+  if (!activeMeds.length) {
+    return {
+      sideEffects: [],
+      interactions: [],
+      profileWarnings: [],
+      communityReports: [],
+      summary: "No medications with database records found.",
+      lastUpdated: new Date(),
+    };
+  }
+
+  // Same profile fetch used by the chatbot
+  const profile = await getUserProfile(uid);
+  const userData = profile?.userData ?? {};
+  const medicalData = profile?.medicalData ?? {};
+
+  const name = userData.name ?? "Patient";
+  const gender = userData.gender ?? "unknown";
+  const dob = userData.dateOfBirth ?? "";
+  const age = calculateAge(dob);
+  const bloodType = medicalData.bloodType ?? "unknown";
+  const height = medicalData.height ?? "unknown";
+  const weight = medicalData.weight ?? "unknown";
+  const conditions = (medicalData.conditions ?? []) as string[];
+  const allergies = (medicalData.allergies ?? []) as string[];
+  const isPregnant = (medicalData.isPregnant ?? false) as boolean;
+  const isBreastfeeding = (medicalData.isBreastfeeding ?? false) as boolean;
+  const trimester = (medicalData.trimester ?? null) as number | null;
+
+  // Same DB helpers used by the chatbot — no new Supabase logic needed
+  const [medContext, interactionContext, userLogsSnap, communityData] =
+    await Promise.all([
+      fetchMedicationContext(activeMeds),
+      fetchInteractionContext(activeMeds),
+      getDocs(collection(db, "users", uid, "symptom_logs")),
+      fetchCommunityLogs(conditions, uid),
+    ]);
+
+  const userLogs =
+    userLogsSnap.docs
+      .slice(0, 20)
+      .map((d) => {
+        const l = d.data();
+        return `- ${l.symptom} (severity ${l.severity}/5)${l.note ? `: ${l.note}` : ""}`;
+      })
+      .join("\n") || "None logged yet.";
+
+  // Build medication summary preserving the FULL combination name
+  // so GPT never splits "Cyproterone acetate + Ethinylestradiol" into ingredient-only names
+  const medSummary = activeMeds
+    .map((m) => {
+      const parts = [m.name];
+      if (m.dosage) parts.push(m.dosage);
+      if (m.is_combination && m.ingredients?.length)
+        parts.push(`— combination of: ${m.ingredients.join(" + ")}`);
+      const ids = m.drug_ids?.length
+        ? m.drug_ids
+        : m.drug_id
+          ? [m.drug_id]
+          : [];
+      if (ids.length) parts.push(`[DrugBank IDs: ${ids.join(", ")}]`);
+      return parts.join(" ");
+    })
+    .join("\n");
+
+  const pregnancyRule =
+    !isPregnant && !isBreastfeeding
+      ? "This patient is NOT pregnant and NOT breastfeeding. Do NOT include any pregnancy or breastfeeding warnings at all. profileWarnings must be [] and each sideEffect.profileWarnings must be []."
+      : `This patient IS ${isPregnant ? "pregnant" + (trimester ? " (trimester " + trimester + ")" : "") : ""}${isPregnant && isBreastfeeding ? " and " : ""}${isBreastfeeding ? "breastfeeding" : ""}. Flag ALL relevant risks.`;
+
+  const prompt = `You are a clinical pharmacist AI generating a medication safety analysis for a patient mobile app.
+Use ONLY the database data provided. Never invent side effects or interactions.
+
+PATIENT PROFILE
+Name: ${name} | Age: ${age} | Gender: ${gender}
+Blood type: ${bloodType} | Height: ${height} cm | Weight: ${weight} kg
+Conditions: ${conditions.join(", ") || "None"}
+Allergies: ${allergies.join(", ") || "None"}
+Pregnant: ${isPregnant ? `Yes${trimester ? ` (trimester ${trimester})` : ""}` : "No"}
+Breastfeeding: ${isBreastfeeding ? "Yes" : "No"}
+
+CURRENT MEDICATIONS (always use the FULL name — never split a combination into individual ingredient names):
+${medSummary}
+
+MEDICATION NAMING RULE: When referring to a medication in your response, always use the FULL name
+exactly as listed above. For example "Cyproterone acetate + Ethinylestradiol 2 mg", NOT "Androcur"
+or just "Cyproterone acetate". The database has separate ingredient entries — combine them per medication.
+
+CURRENT MEDICATIONS: ${medSummary}
+
+MEDICATION DATABASE (ingredient-level data from Supabase)
+${medContext || "No drug data found."}
+
+KNOWN INTERACTIONS FROM DATABASE
+${interactionContext || "No interactions found."}
+
+PATIENT SYMPTOM LOG
+${userLogs}
+
+COMMUNITY REPORTS (anonymized, users with same conditions: ${conditions.join(", ") || "none"})
+${communityData || "No community data available."}
+
+RULES:
+- severity: mild=minor, moderate=needs monitoring, severe=seek immediate care
+- For conditions (${conditions.join(", ")}): flag drugs that worsen them
+- Community reports are anecdotal — label as "reported by users with similar conditions"
+- Plain language — no medical jargon
+- If no data available for a drug, say so honestly
+- ${pregnancyRule}
+
+Respond ONLY with valid JSON (no markdown):
+{
+  "sideEffects": [{
+    "medicationName": "FULL medication name exactly as listed in CURRENT MEDICATIONS",
+    "medicationId": "primary drug_id",
+    "summary": "1-2 sentence plain-language safety summary",
+    "common": ["side effect 1", "side effect 2"],
+    "serious": ["serious side effect 1"],
+    "profileWarnings": []
+  }],
+  "interactions": [{
+    "drugA": "FULL medication name",
+    "drugB": "FULL medication name",
+    "severity": "mild|moderate|severe",
+    "severityReason": "brief reason for this severity",
+    "description": "plain-language explanation",
+    "recommendation": "what the patient should do"
+  }],
+  "profileWarnings": [],
+  "communityReports": [{
+    "symptom": "symptom name",
+    "reportCount": 0,
+    "avgSeverity": 0.0,
+    "medications": ["FULL medication name"],
+    "note": "AI context about this symptom"
+  }],
+  "summary": "2-3 sentence overall safety summary for this patient"
+}`;
+
+  try {
+    console.log("[Reactions] Generating AI analysis...");
+
+    const res = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 2000,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err?.error?.message ?? `OpenAI error ${res.status}`);
+    }
+
+    const json = await res.json();
+    const raw = json.choices?.[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw);
+
+    console.log("[Reactions] Analysis complete");
+
+    return {
+      sideEffects: parsed.sideEffects ?? [],
+      interactions: parsed.interactions ?? [],
+      profileWarnings: parsed.profileWarnings ?? [],
+      communityReports: parsed.communityReports ?? [],
+      summary: parsed.summary ?? "",
+      lastUpdated: new Date(),
+    };
+  } catch (err: any) {
+    console.error("[Reactions] generateReactionsAnalysis:", err.message);
+    throw err;
+  }
+}
