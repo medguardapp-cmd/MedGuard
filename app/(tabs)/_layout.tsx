@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
 
-    backgroundColor: "rgba(255,255,255,0.9)",
+    backgroundColor: "rgba(255,255,255,0.98)",
     borderTopWidth: 0,
 
     elevation: 8,

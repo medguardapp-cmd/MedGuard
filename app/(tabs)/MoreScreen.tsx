@@ -229,7 +229,16 @@ export default function MoreScreen() {
         {/* Actions Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account Actions</Text>
-
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => router.push("/caregiver")} // ← adjust path to match your file
+          >
+            <View style={styles.actionButtonContent}>
+              <Ionicons name="people-outline" size={24} color="#3b82f6" />
+              <Text style={styles.actionButtonText}>Caregiver</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.actionButton}>
             <View style={styles.actionButtonContent}>
               <Ionicons name="create-outline" size={24} color="#3b82f6" />

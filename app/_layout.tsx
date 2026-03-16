@@ -96,11 +96,14 @@ export default function RootLayout() {
               const onboardingCompleted = await AsyncStorage.getItem(
                 `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
               );
-
               console.log("Onboarding completed:", onboardingCompleted);
 
               if (onboardingCompleted === "true") {
-                if (currentRoute !== "(tabs)") {
+                // ← Only redirect if stuck on auth/onboarding screens
+                if (
+                  currentRoute === "(auth)" ||
+                  currentRoute === "(onboarding)"
+                ) {
                   router.replace("/(tabs)");
                 }
               } else {
@@ -133,7 +136,7 @@ export default function RootLayout() {
     };
 
     checkAuthAndOnboarding();
-  }, [segments]);
+  }, []); // ← empty deps
 
   if (!isReady) {
     return (

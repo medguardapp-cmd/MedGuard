@@ -1,5 +1,6 @@
 // app/(tabs)/index.tsx
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import {
   addDoc,
   collection,
@@ -33,7 +34,12 @@ import {
   SnapshotItem,
   snapshotKey,
 } from "../../lib/scheduleSnapshot";
-import { checkAllInteractions } from "../../lib/supabase";
+import {
+  checkAllInteractions,
+  MedicineSearchResult,
+  searchMedicines,
+} from "../../lib/supabase";
+import { tabEvents } from "../../lib/tabEvents";
 
 const DAY_WIDTH = 50;
 
@@ -71,9 +77,11 @@ interface ScheduleItem {
   taken: boolean;
   missed: boolean;
   takenLogId?: string;
+  takenVariance: "early" | "late" | "on-time" | null;
   hasInteraction: boolean;
   interactionSeverity: "mild" | "severe" | null;
   interactionCount: number;
+  late: boolean;
 }
 
 interface InteractionInfo {
@@ -123,6 +131,21 @@ function formatTime12h(time: string) {
   return `${hour12}:${minutes} ${ampm}`;
 }
 
+function getTakenVariance(
+  scheduledTime: string,
+  takenLog: TakenLog | undefined,
+): "early" | "late" | "on-time" | null {
+  if (!takenLog?.takenAt?.toDate) return null;
+  const takenDate = takenLog.takenAt.toDate() as Date;
+  const takenMinutes = takenDate.getHours() * 60 + takenDate.getMinutes();
+  const [sh, sm] = scheduledTime.split(":").map(Number);
+  const scheduledMinutes = sh * 60 + sm;
+  const diff = takenMinutes - scheduledMinutes;
+  if (diff > 15) return "late";
+  if (diff < -15) return "early";
+  return "on-time";
+}
+
 function dateKey(date: Date): string {
   return date.toDateString();
 }
@@ -133,22 +156,20 @@ function dateKey(date: Date): string {
 export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [refreshing, setRefreshing] = useState(false);
+  const router = useRouter();
 
   const [medications, setMedications] = useState<Medication[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
-
-  // snapshots cache: { "2026-01-15": SnapshotItem[] }
   const [snapshots, setSnapshots] = useState<Record<string, SnapshotItem[]>>(
     {},
   );
-
   const [interactions, setInteractions] = useState<InteractionInfo[]>([]);
   const [loadingInteractions, setLoadingInteractions] = useState(false);
   const [interactionsLoaded, setInteractionsLoaded] = useState(false);
-
   const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
 
+  // Quick Take modal state
   const [quickTakeVisible, setQuickTakeVisible] = useState(false);
   const [quickTakeForm, setQuickTakeForm] = useState({
     medicationId: "",
@@ -156,6 +177,14 @@ export default function HomeScreen() {
     dosage: "",
     time: "",
   });
+
+  // Quick Take search state
+  const [quickTakeSearch, setQuickTakeSearch] = useState<
+    MedicineSearchResult[]
+  >([]);
+  const [quickTakeSearching, setQuickTakeSearching] = useState(false);
+  const [quickTakeShowSuggestions, setQuickTakeShowSuggestions] =
+    useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const backfillDone = useRef(false);
@@ -217,7 +246,6 @@ export default function HomeScreen() {
       },
     );
 
-    // Load snapshots for past 15 days into local cache
     const loadSnapshots = async () => {
       const cache: Record<string, SnapshotItem[]> = {};
       await Promise.all(
@@ -307,10 +335,36 @@ export default function HomeScreen() {
     const isPastDay = date < new Date(today.toDateString());
     const isTodayDay = date.toDateString() === today.toDateString();
     const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
+    const now = new Date();
+    const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     if (isPastDay) {
-      // ── Past: build from snapshot, cross-reference taken_logs ──
       const snapshotItems = snapshots[sk] ?? [];
+
+      if (snapshotItems.length === 0) {
+        const quickTakesOnly: ScheduleItem[] = logsForDate
+          .filter((l) => l.reminderId === "quick-take")
+          .map((l) => ({
+            reminderId: l.id,
+            medicationId: l.medicationId,
+            name: l.name,
+            dosage: l.dosage,
+            time: l.takenAt?.toDate
+              ? l.takenAt.toDate().toTimeString().slice(0, 5)
+              : "00:00",
+            taken: true,
+            missed: false,
+            late: false,
+            takenLogId: l.id,
+            takenVariance: null,
+            hasInteraction: false,
+            interactionSeverity: null,
+            interactionCount: 0,
+          }));
+        quickTakesOnly.sort((a, b) => a.time.localeCompare(b.time));
+        setSchedule(quickTakesOnly);
+        return;
+      }
 
       const scheduledItems: ScheduleItem[] = snapshotItems.map((s) => {
         const takenLog = logsForDate.find((l) => l.reminderId === s.reminderId);
@@ -322,14 +376,15 @@ export default function HomeScreen() {
           time: s.time,
           taken: !!takenLog,
           missed: !takenLog,
+          late: false,
           takenLogId: takenLog?.id,
+          takenVariance: getTakenVariance(s.time, takenLog),
           hasInteraction: false,
           interactionSeverity: null,
           interactionCount: 0,
         };
       });
 
-      // Also show quick-takes that aren't in the snapshot
       const quickTakes: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId === "quick-take")
         .map((l) => ({
@@ -342,7 +397,9 @@ export default function HomeScreen() {
             : "00:00",
           taken: true,
           missed: false,
+          late: false,
           takenLogId: l.id,
+          takenVariance: null,
           hasInteraction: false,
           interactionSeverity: null,
           interactionCount: 0,
@@ -354,7 +411,6 @@ export default function HomeScreen() {
       return;
     }
 
-    // ── Today / Future: use live reminders ──
     const dayReminders = reminders.filter((r) => {
       if (!r.enabled) return false;
       if (!r.days || r.days.length === 0) return isTodayDay;
@@ -363,7 +419,6 @@ export default function HomeScreen() {
 
     const items: ScheduleItem[] = dayReminders.map((r) => {
       const med = medications.find((m) => m.id === r.medicationId);
-
       const sameDayDrugIds = dayReminders
         .filter((dr) => dr.medicationId !== r.medicationId)
         .map((dr) => medications.find((m) => m.id === dr.medicationId)?.drug_id)
@@ -381,6 +436,7 @@ export default function HomeScreen() {
         (i) => getInteractionSeverity(i.description) === "severe",
       );
       const takenLog = logsForDate.find((l) => l.reminderId === r.id);
+      const isLate = isTodayDay && !takenLog && r.time < currentTimeStr;
 
       return {
         reminderId: r.id,
@@ -390,7 +446,9 @@ export default function HomeScreen() {
         time: r.time,
         taken: !!takenLog,
         missed: false,
+        late: isLate,
         takenLogId: takenLog?.id,
+        takenVariance: getTakenVariance(r.time, takenLog),
         hasInteraction: medInteractions.length > 0,
         interactionSeverity:
           medInteractions.length > 0 ? (hasSevere ? "severe" : "mild") : null,
@@ -441,9 +499,7 @@ export default function HomeScreen() {
       if (reminder && (!reminder.days || reminder.days.length === 0)) {
         await updateDoc(
           doc(db, "users", userId, "reminders", item.reminderId),
-          {
-            enabled: false,
-          },
+          { enabled: false },
         );
       }
     } catch (err: any) {
@@ -462,7 +518,39 @@ export default function HomeScreen() {
       dosage: med?.dosage ?? "",
       time: `${hh}:${mm}`,
     });
+    setQuickTakeSearch([]);
+    setQuickTakeShowSuggestions(false);
     setQuickTakeVisible(true);
+  };
+
+  const closeQuickTake = () => {
+    setQuickTakeVisible(false);
+    setQuickTakeSearch([]);
+    setQuickTakeShowSuggestions(false);
+  };
+
+  const handleQuickTakeSearch = useCallback(async (text: string) => {
+    setQuickTakeForm((p) => ({ ...p, name: text, medicationId: "" }));
+    if (text.length < 2) {
+      setQuickTakeSearch([]);
+      setQuickTakeShowSuggestions(false);
+      return;
+    }
+    setQuickTakeSearching(true);
+    setQuickTakeShowSuggestions(true);
+    const results = await searchMedicines(text);
+    setQuickTakeSearch(results);
+    setQuickTakeSearching(false);
+  }, []);
+
+  const handleQuickTakeSelect = (item: MedicineSearchResult) => {
+    setQuickTakeForm((p) => ({
+      ...p,
+      name: item.ph_brand,
+      medicationId: item.drug_id,
+    }));
+    setQuickTakeSearch([]);
+    setQuickTakeShowSuggestions(false);
   };
 
   const submitQuickTake = async () => {
@@ -481,7 +569,7 @@ export default function HomeScreen() {
         takenAt: serverTimestamp(),
         dateKey: dateKey(selectedDate),
       });
-      setQuickTakeVisible(false);
+      closeQuickTake();
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to log");
     }
@@ -529,10 +617,8 @@ export default function HomeScreen() {
     return `Upcoming — ${formatDate(date)}`;
   };
 
-  // Dot status per calendar day
   const getDotStatus = (date: Date): "none" | "grey" | "green" | "red" => {
     const dayName = DAY_NAMES[date.getDay()];
-
     if (isPast(date)) {
       const sk = snapshotKey(date);
       const snapshotItems = snapshots[sk] ?? [];
@@ -544,7 +630,6 @@ export default function HomeScreen() {
       );
       return anyMissed ? "red" : "green";
     }
-
     const hasScheduled = reminders.some(
       (r) =>
         r.enabled &&
@@ -560,10 +645,14 @@ export default function HomeScreen() {
     return "rgba(255,255,255,0.7)";
   };
 
-  const severeCount = interactions.filter(
-    (i) => getInteractionSeverity(i.description) === "severe",
+  const scheduledInteractions = schedule.filter((item) => item.hasInteraction);
+  const severeCount = scheduledInteractions.filter(
+    (item) => item.interactionSeverity === "severe",
   ).length;
-  const mildCount = interactions.length - severeCount;
+  const mildCount = scheduledInteractions.filter(
+    (item) => item.interactionSeverity === "mild",
+  ).length;
+  const hasAnyInteractionOnDate = scheduledInteractions.length > 0;
 
   // ─────────────────────────────────────────────
   // Render
@@ -696,12 +785,16 @@ export default function HomeScreen() {
 
         <View style={styles.content}>
           {/* Interaction Warning Banner */}
-          {interactions.length > 0 && (
-            <View
+          {hasAnyInteractionOnDate && (
+            <TouchableOpacity
               style={[
                 styles.interactionBanner,
                 severeCount > 0 ? styles.severeBanner : styles.mildBanner,
               ]}
+              onPress={() => {
+                router.navigate("/(tabs)/MedicationsScreen");
+                setTimeout(() => tabEvents.emit("openReactions"), 300);
+              }}
             >
               <Ionicons
                 name={severeCount > 0 ? "warning" : "information-circle"}
@@ -730,7 +823,7 @@ export default function HomeScreen() {
                 size={18}
                 color={Colors.textTertiary}
               />
-            </View>
+            </TouchableOpacity>
           )}
 
           {/* Selected Date Label */}
@@ -767,7 +860,6 @@ export default function HomeScreen() {
                     item.missed && styles.medicationItemMissed,
                   ]}
                 >
-                  {/* Time */}
                   <View style={styles.timeColumn}>
                     <Text
                       style={[
@@ -779,7 +871,6 @@ export default function HomeScreen() {
                     </Text>
                   </View>
 
-                  {/* Info */}
                   <View style={styles.medInfo}>
                     <View style={styles.medNameRow}>
                       <Text
@@ -798,6 +889,26 @@ export default function HomeScreen() {
                             color={Colors.success}
                           />
                           <Text style={styles.takenBadgeText}>Taken</Text>
+                          {item.takenVariance === "late" && (
+                            <Text
+                              style={[
+                                styles.takenBadgeText,
+                                { color: Colors.warning },
+                              ]}
+                            >
+                              · Late
+                            </Text>
+                          )}
+                          {item.takenVariance === "early" && (
+                            <Text
+                              style={[
+                                styles.takenBadgeText,
+                                { color: Colors.primary },
+                              ]}
+                            >
+                              · Early
+                            </Text>
+                          )}
                         </View>
                       )}
                       {item.missed && (
@@ -808,6 +919,16 @@ export default function HomeScreen() {
                             color={Colors.error}
                           />
                           <Text style={styles.missedBadgeText}>Missed</Text>
+                        </View>
+                      )}
+                      {item.late && !item.taken && (
+                        <View style={styles.lateBadge}>
+                          <Ionicons
+                            name="time"
+                            size={12}
+                            color={Colors.warning}
+                          />
+                          <Text style={styles.lateBadgeText}>Late</Text>
                         </View>
                       )}
                     </View>
@@ -862,7 +983,6 @@ export default function HomeScreen() {
                     )}
                   </View>
 
-                  {/* Right side */}
                   {isTodaySelected && (
                     <TouchableOpacity
                       style={[
@@ -931,11 +1051,69 @@ export default function HomeScreen() {
               )}
             </View>
           )}
-
+          {/* As Needed (Quick Take) Logs */}
+          {isTodaySelected &&
+            takenLogs.filter(
+              (l) =>
+                l.dateKey === dateKey(selectedDate) &&
+                l.reminderId === "quick-take",
+            ).length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>As Needed</Text>
+                <View style={styles.medicationsCard}>
+                  {takenLogs
+                    .filter(
+                      (l) =>
+                        l.dateKey === dateKey(selectedDate) &&
+                        l.reminderId === "quick-take",
+                    )
+                    .map((log, index, arr) => (
+                      <View
+                        key={log.id}
+                        style={[
+                          styles.medicationItem,
+                          index === arr.length - 1 && styles.medicationItemLast,
+                        ]}
+                      >
+                        <View style={styles.timeColumn}>
+                          <Text style={styles.medTime}>
+                            {log.takenAt?.toDate
+                              ? formatTime12h(
+                                  log.takenAt
+                                    .toDate()
+                                    .toTimeString()
+                                    .slice(0, 5),
+                                )
+                              : "--"}
+                          </Text>
+                        </View>
+                        <View style={styles.medInfo}>
+                          <Text style={styles.medName}>{log.name}</Text>
+                          <Text style={styles.medDosage}>{log.dosage}</Text>
+                        </View>
+                        <View style={styles.takenBadge}>
+                          <Ionicons
+                            name="checkmark"
+                            size={12}
+                            color={Colors.success}
+                          />
+                          <Text style={styles.takenBadgeText}>Taken</Text>
+                        </View>
+                      </View>
+                    ))}
+                </View>
+              </>
+            )}
           {/* Quick Actions */}
           <Text style={styles.sectionTitle}>Quick Actions</Text>
           <View style={styles.actionsContainer}>
-            <TouchableOpacity style={styles.actionButton}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                router.navigate("/(tabs)/MedicationsScreen");
+                setTimeout(() => tabEvents.emit("openAddMedication"), 300);
+              }}
+            >
               <View
                 style={[styles.actionIcon, { backgroundColor: Colors.success }]}
               >
@@ -943,7 +1121,14 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.actionText}>Add Med</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton}>
+
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                router.navigate("/(tabs)/MedicationsScreen");
+                setTimeout(() => tabEvents.emit("openLogReaction"), 300);
+              }}
+            >
               <View
                 style={[styles.actionIcon, { backgroundColor: Colors.warning }]}
               >
@@ -951,7 +1136,14 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.actionText}>Log Reaction</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton}>
+
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                router.navigate("/(tabs)/MedicationsScreen");
+                setTimeout(() => tabEvents.emit("openAddReminder"), 300);
+              }}
+            >
               <View
                 style={[styles.actionIcon, { backgroundColor: Colors.primary }]}
               >
@@ -959,6 +1151,7 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.actionText}>Add Reminder</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.actionButton}
               onPress={() =>
@@ -1035,37 +1228,102 @@ export default function HomeScreen() {
               </>
             )}
 
-          <View style={{ height: 20 }} />
+          <View style={{ height: 100 }} />
         </View>
       </ScrollView>
 
-      {/* Quick Take Modal */}
+      {/* ── Quick Take Modal ── */}
       <Modal
         animationType="slide"
         transparent
         visible={quickTakeVisible}
-        onRequestClose={() => setQuickTakeVisible(false)}
+        onRequestClose={closeQuickTake}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Log a Dose</Text>
-              <TouchableOpacity onPress={() => setQuickTakeVisible(false)}>
+              <TouchableOpacity onPress={closeQuickTake}>
                 <Ionicons name="close" size={24} color={Colors.text} />
               </TouchableOpacity>
             </View>
+
+            {/* Medication name with search */}
             <View style={styles.formGroup}>
               <Text style={styles.label}>Medication</Text>
               <TextInput
                 style={styles.input}
                 value={quickTakeForm.name}
-                onChangeText={(t) =>
-                  setQuickTakeForm((p) => ({ ...p, name: t }))
-                }
-                placeholder="e.g. Paracetamol / Biogesic"
+                onChangeText={handleQuickTakeSearch}
+                placeholder="Search brand or generic name..."
                 placeholderTextColor={Colors.textTertiary}
               />
+
+              {/* Search suggestions */}
+              {quickTakeShowSuggestions && (
+                <View style={[styles.suggestionsContainer, { maxHeight: 200 }]}>
+                  {quickTakeSearching ? (
+                    <View style={styles.suggestionLoading}>
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                      <Text style={styles.suggestionLoadingText}>
+                        Searching...
+                      </Text>
+                    </View>
+                  ) : quickTakeSearch.length > 0 ? (
+                    <ScrollView
+                      scrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {quickTakeSearch.map((item) => (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={styles.suggestionItem}
+                          onPress={() => handleQuickTakeSelect(item)}
+                        >
+                          <View style={styles.suggestionRow}>
+                            <View style={styles.suggestionTextContainer}>
+                              <Text style={styles.suggestionBrand}>
+                                {item.ph_brand}
+                              </Text>
+                              {!item.is_generic &&
+                                item.generic_name !== item.ph_brand && (
+                                  <Text style={styles.suggestionGeneric}>
+                                    {item.generic_name}
+                                  </Text>
+                                )}
+                            </View>
+                            <View
+                              style={[
+                                styles.suggestionTypeBadge,
+                                item.is_generic &&
+                                  styles.suggestionGenericBadge,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.suggestionTypeText,
+                                  item.is_generic &&
+                                    styles.suggestionGenericTypeText,
+                                ]}
+                              >
+                                {item.is_generic ? "Generic" : "Brand"}
+                              </Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  ) : (
+                    <View style={styles.suggestionEmpty}>
+                      <Text style={styles.suggestionEmptyText}>
+                        No medicines found
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
+
             <View style={styles.formGroup}>
               <Text style={styles.label}>Dosage</Text>
               <TextInput
@@ -1078,6 +1336,7 @@ export default function HomeScreen() {
                 placeholderTextColor={Colors.textTertiary}
               />
             </View>
+
             <View style={styles.formGroup}>
               <Text style={styles.label}>Time taken</Text>
               <TextInput
@@ -1091,10 +1350,11 @@ export default function HomeScreen() {
                 keyboardType="numbers-and-punctuation"
               />
             </View>
+
             <View style={styles.modalFooter}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setQuickTakeVisible(false)}
+                onPress={closeQuickTake}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -1320,6 +1580,16 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   missedBadgeText: { fontSize: 11, color: Colors.error, fontWeight: "600" },
+  lateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    backgroundColor: Colors.warning + "15",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  lateBadgeText: { fontSize: 11, color: Colors.warning, fontWeight: "600" },
   tagRow: { flexDirection: "row", gap: 6, marginTop: 4, flexWrap: "wrap" },
   interactionTag: {
     flexDirection: "row",
@@ -1405,6 +1675,8 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     maxWidth: 100,
   },
+
+  // Modal
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -1454,4 +1726,54 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: Colors.primary },
   cancelButtonText: { color: Colors.text, fontSize: 16, fontWeight: "600" },
   saveButtonText: { color: Colors.surface, fontSize: 16, fontWeight: "600" },
+
+  // Search suggestions
+  suggestionsContainer: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    marginTop: 4,
+    overflow: "hidden",
+  },
+  suggestionItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  suggestionTextContainer: { flex: 1, marginRight: 8 },
+  suggestionBrand: { fontSize: 15, fontWeight: "600", color: Colors.text },
+  suggestionGeneric: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  suggestionTypeBadge: {
+    backgroundColor: Colors.primary + "15",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  suggestionGenericBadge: { backgroundColor: Colors.success + "15" },
+  suggestionTypeText: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: "600",
+  },
+  suggestionGenericTypeText: { color: Colors.success },
+  suggestionLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    gap: 8,
+  },
+  suggestionLoadingText: { fontSize: 14, color: Colors.textSecondary },
+  suggestionEmpty: { padding: 12 },
+  suggestionEmptyText: { fontSize: 14, color: Colors.textSecondary },
 });

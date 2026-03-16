@@ -47,9 +47,9 @@ import {
 import {
   checkAllInteractions,
   MedicineSearchResult,
-  searchMedicines
+  searchMedicines,
 } from "../../lib/supabase";
-
+import { tabEvents } from "../../lib/tabEvents";
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
@@ -206,7 +206,15 @@ export default function MedicationsScreen() {
     Colors.error,
     Colors.error,
   ];
-
+  useEffect(() => {
+    const cleanups = [
+      tabEvents.on("openReactions", () => setActiveTab("reactions")),
+      tabEvents.on("openAddMedication", () => handleAddMedication()),
+      tabEvents.on("openAddReminder", () => handleAddReminder()),
+      tabEvents.on("openLogReaction", () => setLogModalVisible(true)),
+    ];
+    return () => cleanups.forEach((c) => c());
+  }, []);
   // ─── Firebase: Load medications + reminders ───
   useEffect(() => {
     const userId = auth.currentUser?.uid;
