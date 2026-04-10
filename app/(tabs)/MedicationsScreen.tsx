@@ -83,6 +83,9 @@ interface Reminder {
   sound: boolean;
   vibrate: boolean;
   label?: string;
+  durationType?: "none" | "date-range" | "until-empty";
+  startDate?: string; // "YYYY-MM-DD"
+  endDate?: string; // "YYYY-MM-DD"
 }
 
 interface InteractionWarning {
@@ -175,6 +178,9 @@ export default function MedicationsScreen() {
     useState<Medication | null>(null);
   const [showMedicationSelector, setShowMedicationSelector] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
 
   // ─── Reactions tab state (UPDATED) ───────────
   const [aiAnalysis, setAiAnalysis] = useState<ReactionsAnalysis | null>(null);
@@ -288,10 +294,10 @@ export default function MedicationsScreen() {
   const loadReactionsData = async () => {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
-  
+
     setLoadingReactions(true);
     setReactionsError(null);
-  
+
     const activeMeds = medications.filter((m) => m.active);
     if (!activeMeds.length) {
       setAiAnalysis(null);
@@ -299,30 +305,44 @@ export default function MedicationsScreen() {
       setReactionsLoaded(true);
       return;
     }
-  
+
     // ── Filter to only meds relevant TODAY ──
     const today = new Date().toDateString();
-    const dayName = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date().getDay()];
-  
-    const takenSnap = await getDocs(collection(db, "users", userId, "taken_logs"));
+    const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+      new Date().getDay()
+    ];
+
+    const takenSnap = await getDocs(
+      collection(db, "users", userId, "taken_logs"),
+    );
     const takenTodayMedIds = takenSnap.docs
       .map((d) => d.data())
       .filter((l) => l.dateKey === today)
       .map((l) => l.medicationId)
       .filter(Boolean);
-  
+
     const scheduledTodayMedIds = reminders
-      .filter((r) => r.enabled && (r.days.length === 0 || r.days.includes(dayName)))
+      .filter(
+        (r) => r.enabled && (r.days.length === 0 || r.days.includes(dayName)),
+      )
       .map((r) => r.medicationId);
-  
-    const relevantMedIds = new Set([...takenTodayMedIds, ...scheduledTodayMedIds]);
+
+    const relevantMedIds = new Set([
+      ...takenTodayMedIds,
+      ...scheduledTodayMedIds,
+    ]);
     const todayMeds = activeMeds.filter((m) => relevantMedIds.has(m.id));
     const medsToAnalyze = todayMeds.length > 0 ? todayMeds : activeMeds;
-  
+
     // ── Check cache ──
-    const cacheKey = `reactions_${today}_${medsToAnalyze.map((m) => m.id).sort().join("_")}`;
+    const cacheKey = `reactions_${today}_${medsToAnalyze
+      .map((m) => m.id)
+      .sort()
+      .join("_")}`;
     try {
-      const cacheDoc = await getDoc(doc(db, "users", userId, "reactions_cache", "latest"));
+      const cacheDoc = await getDoc(
+        doc(db, "users", userId, "reactions_cache", "latest"),
+      );
       if (cacheDoc.exists()) {
         const cached = cacheDoc.data();
         if (cached.cacheKey === cacheKey && cached.analysis) {
@@ -339,21 +359,21 @@ export default function MedicationsScreen() {
     } catch (e) {
       console.warn("Could not read reactions cache:", e);
     }
-  
+
     // ── Generate fresh analysis ──
     try {
       const analysis = await generateReactionsAnalysis(userId, medsToAnalyze);
       setAiAnalysis(analysis);
-  
+
       try {
         await setDoc(doc(db, "users", userId, "reactions_cache", "latest"), {
           cacheKey,
           analysis: {
-            sideEffects:      analysis.sideEffects,
-            interactions:     analysis.interactions,
-            profileWarnings:  analysis.profileWarnings,
+            sideEffects: analysis.sideEffects,
+            interactions: analysis.interactions,
+            profileWarnings: analysis.profileWarnings,
             communityReports: analysis.communityReports,
-            summary:          analysis.summary,
+            summary: analysis.summary,
           },
           cachedAt: serverTimestamp(),
         });
@@ -361,7 +381,9 @@ export default function MedicationsScreen() {
         console.warn("Could not save reactions cache:", e);
       }
     } catch (err: any) {
-      setReactionsError(err.message || "Failed to generate analysis. Please try again.");
+      setReactionsError(
+        err.message || "Failed to generate analysis. Please try again.",
+      );
     } finally {
       setLoadingReactions(false);
       setReactionsLoaded(true);
@@ -622,6 +644,9 @@ export default function MedicationsScreen() {
       enabled: true,
       sound: true,
       vibrate: true,
+      durationType: "none",
+      startDate: "",
+      endDate: "",
     });
     setShowMedicationSelector(true);
   };
@@ -679,6 +704,9 @@ export default function MedicationsScreen() {
       sound: reminderFormData.sound !== false,
       vibrate: reminderFormData.vibrate !== false,
       label: reminderFormData.label || null,
+      durationType: reminderFormData.durationType || "none",
+      startDate: reminderFormData.startDate || null,
+      endDate: reminderFormData.endDate || null,
     };
     try {
       let savedReminderId = editingReminder?.id ?? "";
@@ -1077,6 +1105,18 @@ export default function MedicationsScreen() {
                       <Text style={styles.reminderDaysText}>
                         {getDaysString(reminder.days)}
                       </Text>
+                      {reminder.durationType === "date-range" &&
+                        reminder.startDate &&
+                        reminder.endDate && (
+                          <Text style={styles.reminderDurationText}>
+                            {reminder.startDate} → {reminder.endDate}
+                          </Text>
+                        )}
+                      {reminder.durationType === "until-empty" && (
+                        <Text style={styles.reminderDurationText}>
+                          Until medication runs out
+                        </Text>
+                      )}
                       {reminder.label && (
                         <View style={styles.reminderLabel}>
                           <Text style={styles.reminderLabelText}>
@@ -1184,7 +1224,16 @@ export default function MedicationsScreen() {
                       const userId = auth.currentUser?.uid;
                       if (userId) {
                         try {
-                          await setDoc(doc(db, "users", userId, "reactions_cache", "latest"), { cacheKey: "" });
+                          await setDoc(
+                            doc(
+                              db,
+                              "users",
+                              userId,
+                              "reactions_cache",
+                              "latest",
+                            ),
+                            { cacheKey: "" },
+                          );
                         } catch (e) {}
                       }
                       setReactionsLoaded(false);
@@ -2180,6 +2229,136 @@ export default function MedicationsScreen() {
                   />
                 </View>
               </View>
+              {/* Duration */}
+              <View style={styles.formGroup}>
+                <Text style={styles.label}>Duration (Optional)</Text>
+                <View style={styles.durationTypeRow}>
+                  {[
+                    { value: "none", label: "No limit" },
+                    { value: "date-range", label: "Date range" },
+                    { value: "until-empty", label: "Until empty" },
+                  ].map((opt) => (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={[
+                        styles.durationTypeBtn,
+                        reminderFormData.durationType === opt.value &&
+                          styles.durationTypeBtnActive,
+                      ]}
+                      onPress={() =>
+                        setReminderFormData({
+                          ...reminderFormData,
+                          durationType: opt.value as any,
+                        })
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.durationTypeBtnText,
+                          reminderFormData.durationType === opt.value &&
+                            styles.durationTypeBtnTextActive,
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {reminderFormData.durationType === "date-range" && (
+                  <View style={styles.dateRangeRow}>
+                    <TouchableOpacity
+                      style={styles.datePickerBtn}
+                      onPress={() => setShowStartDatePicker(true)}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={16}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.datePickerBtnText}>
+                        {reminderFormData.startDate || "Start date"}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <Text style={styles.dateRangeSeparator}>→</Text>
+
+                    <TouchableOpacity
+                      style={styles.datePickerBtn}
+                      onPress={() => setShowEndDatePicker(true)}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={16}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.datePickerBtnText}>
+                        {reminderFormData.endDate || "End date"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {showStartDatePicker && (
+                  <DateTimePicker
+                    value={
+                      reminderFormData.startDate
+                        ? new Date(reminderFormData.startDate)
+                        : new Date()
+                    }
+                    mode="date"
+                    display="default"
+                    minimumDate={new Date()}
+                    onChange={(event, date) => {
+                      setShowStartDatePicker(false);
+                      if (event.type === "dismissed" || !date) return;
+                      setReminderFormData({
+                        ...reminderFormData,
+                        startDate: date.toISOString().split("T")[0],
+                      });
+                    }}
+                  />
+                )}
+
+                {showEndDatePicker && (
+                  <DateTimePicker
+                    value={
+                      reminderFormData.endDate
+                        ? new Date(reminderFormData.endDate)
+                        : new Date()
+                    }
+                    mode="date"
+                    display="default"
+                    minimumDate={
+                      reminderFormData.startDate
+                        ? new Date(reminderFormData.startDate)
+                        : new Date()
+                    }
+                    onChange={(event, date) => {
+                      setShowEndDatePicker(false);
+                      if (event.type === "dismissed" || !date) return;
+                      setReminderFormData({
+                        ...reminderFormData,
+                        endDate: date.toISOString().split("T")[0],
+                      });
+                    }}
+                  />
+                )}
+
+                {reminderFormData.durationType === "until-empty" && (
+                  <View style={styles.untilEmptyNote}>
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={14}
+                      color={Colors.primary}
+                    />
+                    <Text style={styles.untilEmptyNoteText}>
+                      Reminder will auto-disable when medication quantity
+                      reaches 0
+                    </Text>
+                  </View>
+                )}
+              </View>
               <View style={styles.formGroup}>
                 <View style={styles.switchContainer}>
                   <Text style={styles.label}>Vibrate</Text>
@@ -2982,5 +3161,59 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.primary,
     fontWeight: "600",
+  },
+  durationTypeRow: { flexDirection: "row", gap: 6, marginBottom: 10 },
+  durationTypeBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    backgroundColor: Colors.background,
+  },
+  durationTypeBtnActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  durationTypeBtnText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontWeight: "500",
+  },
+  durationTypeBtnTextActive: { color: Colors.surface },
+  dateRangeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  datePickerBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  datePickerBtnText: { fontSize: 13, color: Colors.text, flex: 1 },
+  dateRangeSeparator: { fontSize: 16, color: Colors.textTertiary },
+  untilEmptyNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    backgroundColor: Colors.primary + "10",
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 6,
+  },
+  untilEmptyNoteText: {
+    fontSize: 12,
+    color: Colors.primary,
+    flex: 1,
+    lineHeight: 16,
+  },
+  reminderDurationText: {
+    fontSize: 11,
+    color: Colors.textTertiary,
+    marginTop: 2,
   },
 });
