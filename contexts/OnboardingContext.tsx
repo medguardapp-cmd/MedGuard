@@ -1,5 +1,6 @@
 // contexts/OnboardingContext.tsx - FIXED VERSION
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import React, {
   createContext,
   ReactNode,
@@ -9,6 +10,7 @@ import React, {
 } from "react";
 import { Alert } from "react-native";
 import { useAuth } from "../hooks/useAuth";
+import { db } from "../lib/firebase";
 import {
   getUserData,
   saveOnboardingData,
@@ -182,7 +184,8 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
       try {
         await saveOnboardingData(user.uid, data, true);
         console.log("✅ Final data saved to Firestore");
-      } catch (firestoreError) {
+      }
+       catch (firestoreError) {
         console.warn("⚠️ Firestore final save failed:", firestoreError);
         // Show warning but continue
         Alert.alert(
@@ -191,7 +194,10 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
           [{ text: "OK" }],
         );
       }
-
+      await setDoc(doc(db, "users", user.uid), {
+        onboardingCompleted: true,
+        onboardingCompletedAt: serverTimestamp(),
+      }, { merge: true });
       // Always set AsyncStorage - this is critical for the app to work
       await AsyncStorage.setItem(
         `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,

@@ -3,7 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { Slot, SplashScreen, useRouter, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { OnboardingProvider } from "../contexts/OnboardingContext";
@@ -79,31 +79,47 @@ export default function RootLayout() {
     const checkAuthAndOnboarding = async () => {
       try {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
-          console.log(
-            "Auth state changed:",
-            user?.email,
-            "verified:",
-            user?.emailVerified,
-          );
-
           await new Promise((resolve) => setTimeout(resolve, 500));
-
+    
           const currentRoute = segments[0];
-          console.log("Current route:", currentRoute);
-
+    
           if (user) {
             if (user.emailVerified) {
-              const onboardingCompleted = await AsyncStorage.getItem(
+              // 1. Check AsyncStorage first (fast)
+              let onboardingCompleted = await AsyncStorage.getItem(
                 `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
               );
-              console.log("Onboarding completed:", onboardingCompleted);
+    
+              // 2. Fallback to Firestore if AsyncStorage is empty
+              // 2. Fallback to Firestore if AsyncStorage is empty
+if (onboardingCompleted !== "true") {
+  try {
+    const userDoc = await getDoc(doc(db, "users", user.uid));
+    if (userDoc.exists()) {
+      const data = userDoc.data();
+      // Check either the explicit flag OR that they have userData saved
+      const hasCompleted =
+        data?.onboardingCompleted === true ||
+        (data?.userData?.name && data.userData.name.trim().length > 0);
 
+      if (hasCompleted) {
+        await AsyncStorage.setItem(
+          `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
+          "true",
+        );
+        onboardingCompleted = "true";
+        console.log("✅ Onboarding synced from Firestore");
+      }
+    }
+  } catch (e) {
+    console.warn("Could not check Firestore for onboarding:", e);
+  }
+}
+    
+              console.log("Onboarding completed:", onboardingCompleted);
+    
               if (onboardingCompleted === "true") {
-                // ← Only redirect if stuck on auth/onboarding screens
-                if (
-                  currentRoute === "(auth)" ||
-                  currentRoute === "(onboarding)"
-                ) {
+                if (currentRoute !== "(tabs)") {
                   router.replace("/(tabs)");
                 }
               } else {
@@ -121,11 +137,11 @@ export default function RootLayout() {
               router.replace("/(auth)/onboarding");
             }
           }
-
+    
           setIsReady(true);
           SplashScreen.hideAsync();
         });
-
+    
         return unsubscribe;
       } catch (error) {
         console.error("Auth check error:", error);

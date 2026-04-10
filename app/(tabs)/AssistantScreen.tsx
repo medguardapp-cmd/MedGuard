@@ -1,7 +1,7 @@
 // app/(tabs)/assistant.tsx
 
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -117,12 +117,6 @@ export default function AssistantScreen() {
         handleQuickAction(
           "Check drug interactions for all my current medications",
         ),
-    },
-    {
-      id: "qa4",
-      title: "Refill Reminder",
-      icon: "refresh",
-      action: () => handleQuickAction("What medications need refills?"),
     },
     {
       id: "qa5",
@@ -262,6 +256,7 @@ export default function AssistantScreen() {
   // ── Format time ───────────────────────────────────────────────────────────────
   const formatTime = (time?: string) => {
     if (!time) return "";
+    if (!/^\d{1,2}:\d{2}$/.test(time)) return time;
     const [hours, minutes] = time.split(":");
     const hour = parseInt(hours);
     const ampm = hour >= 12 ? "PM" : "AM";

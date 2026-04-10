@@ -1,7 +1,23 @@
 {
   "name": "medguard",
-  "main": "expo-router/entry",
   "version": "1.0.0",
+  "private": true,
+  "description": "This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).",
+  "homepage": "https://github.com/medguardapp-cmd/MedGuard#readme",
+  "bugs": {
+    "url": "https://github.com/medguardapp-cmd/MedGuard/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medguardapp-cmd/MedGuard.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "expo-router/entry",
+  "directories": {
+    "lib": "lib"
+  },
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -52,6 +68,5 @@
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
-  },
-  "private": true
+  }
 }

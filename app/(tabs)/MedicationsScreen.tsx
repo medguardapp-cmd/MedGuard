@@ -8,10 +8,13 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
@@ -285,10 +288,10 @@ export default function MedicationsScreen() {
   const loadReactionsData = async () => {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
-
+  
     setLoadingReactions(true);
     setReactionsError(null);
-
+  
     const activeMeds = medications.filter((m) => m.active);
     if (!activeMeds.length) {
       setAiAnalysis(null);
@@ -296,14 +299,69 @@ export default function MedicationsScreen() {
       setReactionsLoaded(true);
       return;
     }
-
+  
+    // ── Filter to only meds relevant TODAY ──
+    const today = new Date().toDateString();
+    const dayName = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date().getDay()];
+  
+    const takenSnap = await getDocs(collection(db, "users", userId, "taken_logs"));
+    const takenTodayMedIds = takenSnap.docs
+      .map((d) => d.data())
+      .filter((l) => l.dateKey === today)
+      .map((l) => l.medicationId)
+      .filter(Boolean);
+  
+    const scheduledTodayMedIds = reminders
+      .filter((r) => r.enabled && (r.days.length === 0 || r.days.includes(dayName)))
+      .map((r) => r.medicationId);
+  
+    const relevantMedIds = new Set([...takenTodayMedIds, ...scheduledTodayMedIds]);
+    const todayMeds = activeMeds.filter((m) => relevantMedIds.has(m.id));
+    const medsToAnalyze = todayMeds.length > 0 ? todayMeds : activeMeds;
+  
+    // ── Check cache ──
+    const cacheKey = `reactions_${today}_${medsToAnalyze.map((m) => m.id).sort().join("_")}`;
     try {
-      const analysis = await generateReactionsAnalysis(userId, activeMeds);
+      const cacheDoc = await getDoc(doc(db, "users", userId, "reactions_cache", "latest"));
+      if (cacheDoc.exists()) {
+        const cached = cacheDoc.data();
+        if (cached.cacheKey === cacheKey && cached.analysis) {
+          console.log("⚡ Using cached reactions analysis");
+          setAiAnalysis({
+            ...cached.analysis,
+            lastUpdated: cached.cachedAt?.toDate() ?? new Date(),
+          });
+          setLoadingReactions(false);
+          setReactionsLoaded(true);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not read reactions cache:", e);
+    }
+  
+    // ── Generate fresh analysis ──
+    try {
+      const analysis = await generateReactionsAnalysis(userId, medsToAnalyze);
       setAiAnalysis(analysis);
+  
+      try {
+        await setDoc(doc(db, "users", userId, "reactions_cache", "latest"), {
+          cacheKey,
+          analysis: {
+            sideEffects:      analysis.sideEffects,
+            interactions:     analysis.interactions,
+            profileWarnings:  analysis.profileWarnings,
+            communityReports: analysis.communityReports,
+            summary:          analysis.summary,
+          },
+          cachedAt: serverTimestamp(),
+        });
+      } catch (e) {
+        console.warn("Could not save reactions cache:", e);
+      }
     } catch (err: any) {
-      setReactionsError(
-        err.message || "Failed to generate analysis. Please try again.",
-      );
+      setReactionsError(err.message || "Failed to generate analysis. Please try again.");
     } finally {
       setLoadingReactions(false);
       setReactionsLoaded(true);
@@ -1122,7 +1180,15 @@ export default function MedicationsScreen() {
                   <Ionicons name="sparkles" size={20} color={Colors.primary} />
                   <Text style={styles.sectionTitle}>AI Analysis</Text>
                   <TouchableOpacity
-                    onPress={() => setReactionsLoaded(false)}
+                    onPress={async () => {
+                      const userId = auth.currentUser?.uid;
+                      if (userId) {
+                        try {
+                          await setDoc(doc(db, "users", userId, "reactions_cache", "latest"), { cacheKey: "" });
+                        } catch (e) {}
+                      }
+                      setReactionsLoaded(false);
+                    }}
                     style={styles.refreshButton}
                   >
                     <Ionicons name="refresh" size={18} color={Colors.primary} />
