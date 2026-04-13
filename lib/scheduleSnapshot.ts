@@ -1,10 +1,4 @@
 // lib/scheduleSnapshot.ts
-// Schedule snapshot helpers — used by both medications.tsx and index.tsx
-// Keeping this in lib/ avoids circular imports between tab screens.
-//
-// Firestore path: users/{uid}/schedule_snapshots/{YYYY-MM-DD}
-// Doc shape: { savedAt: timestamp, items: SnapshotItem[] }
-
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -13,10 +7,9 @@ export interface SnapshotItem {
   medicationId: string;
   name: string;
   dosage: string;
-  time: string;
+  time: string; // one entry per time slot
 }
 
-// "YYYY-MM-DD" key for a given date
 export function snapshotKey(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -24,11 +17,6 @@ export function snapshotKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-/**
- * Upsert a single reminder into today's schedule_snapshot.
- * Called from medications.tsx whenever a reminder is saved (create or edit).
- * Only writes if the reminder is enabled AND applies to today.
- */
 export async function upsertReminderSnapshot(
   userId: string,
   reminder: {
@@ -36,7 +24,7 @@ export async function upsertReminderSnapshot(
     medicationId: string;
     medicationName: string;
     medicationDosage: string;
-    time: string;
+    times: string[];
     days: string[];
     enabled: boolean;
   },
@@ -46,7 +34,7 @@ export async function upsertReminderSnapshot(
   const dayName = DAY_NAMES[today.getDay()];
   const fitsToday =
     !reminder.days || reminder.days.length === 0
-      ? true // one-time reminder always counts today
+      ? true
       : reminder.days.includes(dayName);
 
   if (!fitsToday || !reminder.enabled) return;
@@ -55,34 +43,29 @@ export async function upsertReminderSnapshot(
   const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
   const snapDoc = await getDoc(snapRef);
 
-  const newItem: SnapshotItem = {
+  // One SnapshotItem per time slot
+  const newItems: SnapshotItem[] = reminder.times.map((t) => ({
     reminderId: reminder.id,
     medicationId: reminder.medicationId,
     name: reminder.medicationName,
     dosage: reminder.medicationDosage,
-    time: reminder.time,
-  };
+    time: t,
+  }));
 
   if (snapDoc.exists()) {
     const existing: SnapshotItem[] = snapDoc.data()?.items ?? [];
-    // Replace existing entry for this reminderId, or append
-    const updated = existing.filter((i) => i.reminderId !== reminder.id);
-    updated.push(newItem);
+    // Remove all existing entries for this reminderId, then append new ones
+    const filtered = existing.filter((i) => i.reminderId !== reminder.id);
     await setDoc(
       snapRef,
-      { items: updated, savedAt: serverTimestamp() },
+      { items: [...filtered, ...newItems], savedAt: serverTimestamp() },
       { merge: true },
     );
   } else {
-    await setDoc(snapRef, { items: [newItem], savedAt: serverTimestamp() });
+    await setDoc(snapRef, { items: newItems, savedAt: serverTimestamp() });
   }
 }
 
-/**
- * Remove a reminder from TODAY's snapshot only.
- * Called from medications.tsx when a reminder is deleted.
- * Past snapshots are intentionally left untouched — they are history.
- */
 export async function removeReminderFromTodaySnapshot(
   userId: string,
   reminderId: string,
@@ -103,9 +86,8 @@ export async function removeReminderFromTodaySnapshot(
 }
 
 /**
- * One-time backfill: write today's snapshot from all current reminders.
- * Called from index.tsx on first load. Safe to call multiple times —
- * skips if snapshot already exists.
+ * Backfill snapshot for a specific date
+ * IMPORTANT: Only backfills TODAY's snapshot, never past dates
  */
 export async function backfillTodaySnapshot(
   userId: string,
@@ -114,35 +96,92 @@ export async function backfillTodaySnapshot(
     medicationId: string;
     medicationName: string;
     medicationDosage: string;
-    time: string;
+    times: string[];
     days: string[];
     enabled: boolean;
   }[],
-  today: Date = new Date(),
+  date: Date = new Date(),
 ): Promise<void> {
-  const sk = snapshotKey(today);
+  const sk = snapshotKey(date);
   const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
   const snapDoc = await getDoc(snapRef);
-  if (snapDoc.exists()) return; // already written today
 
-  const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const dayName = DAY_NAMES[today.getDay()];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const normalizedDate = new Date(date);
+  normalizedDate.setHours(0, 0, 0, 0);
+  const isToday = normalizedDate.getTime() === today.getTime();
+  const isPast = normalizedDate < today;
 
-  const items: SnapshotItem[] = reminders
-    .filter((r) => {
-      if (!r.enabled) return false;
-      if (!r.days || r.days.length === 0) return true;
-      return r.days.includes(dayName);
-    })
-    .map((r) => ({
-      reminderId: r.id,
-      medicationId: r.medicationId,
-      name: r.medicationName,
-      dosage: r.medicationDosage,
-      time: r.time,
-    }));
-
-  if (items.length > 0) {
-    await setDoc(snapRef, { items, savedAt: serverTimestamp() });
+  // NEVER backfill past dates - they should remain as they were or be empty
+  if (isPast) {
+    return;
   }
+
+  // Only create snapshot for today if it doesn't exist
+  if (isToday && !snapDoc.exists()) {
+    const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dayName = DAY_NAMES[normalizedDate.getDay()];
+
+    const items: SnapshotItem[] = reminders
+      .filter((r) => {
+        if (!r.enabled) return false;
+        if (!r.days || r.days.length === 0) return true;
+        return r.days.includes(dayName);
+      })
+      .flatMap((r) =>
+        r.times.map((t) => ({
+          reminderId: r.id,
+          medicationId: r.medicationId,
+          name: r.medicationName,
+          dosage: r.medicationDosage,
+          time: t,
+        })),
+      );
+
+    if (items.length > 0) {
+      await setDoc(snapRef, { items, savedAt: serverTimestamp() });
+    }
+  }
+}
+
+/**
+ * Clean up incorrectly created past snapshots
+ * This should be called once to clean up any bad data
+ */
+export async function cleanupPastSnapshots(userId: string): Promise<void> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Check last 30 days
+  for (let i = 1; i <= 30; i++) {
+    const pastDate = new Date(today);
+    pastDate.setDate(today.getDate() - i);
+    const sk = snapshotKey(pastDate);
+    const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
+    const snapDoc = await getDoc(snapRef);
+
+    if (snapDoc.exists()) {
+      // Delete or clear past snapshots since they shouldn't exist
+      await setDoc(snapRef, { items: [], savedAt: serverTimestamp() });
+      console.log(`Cleaned up snapshot for ${sk}`);
+    }
+  }
+}
+
+/**
+ * Get snapshot for a specific date (returns null if not exists)
+ */
+export async function getSnapshot(
+  userId: string,
+  date: Date,
+): Promise<SnapshotItem[] | null> {
+  const sk = snapshotKey(date);
+  const snapRef = doc(db, "users", userId, "schedule_snapshots", sk);
+  const snapDoc = await getDoc(snapRef);
+
+  if (snapDoc.exists()) {
+    return snapDoc.data()?.items ?? [];
+  }
+  return null;
 }

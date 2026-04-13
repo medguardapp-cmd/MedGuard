@@ -1,7 +1,7 @@
 // constants/colors.ts
 const Colors = {
   // Primary colors
-  primary: "#3b82f6",
+  primary: "#4A70A9",
   primaryDark: "#1d4ed8",
   primaryLight: "#93c5fd",
 
@@ -15,8 +15,8 @@ const Colors = {
   textTertiary: "#94a3b8",
 
   // Status colors
-  success: "#10b981",
-  warning: "#f59e0b",
+  success: "#10b964",
+  warning: "#e0a135",
   error: "#ef4444",
   info: "#3b82f6",
 

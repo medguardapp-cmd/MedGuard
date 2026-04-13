@@ -31,6 +31,7 @@ import Colors from "../../constants/colors";
 import { auth, db } from "../../lib/firebase";
 import {
   backfillTodaySnapshot,
+  cleanupPastSnapshots,
   SnapshotItem,
   snapshotKey,
 } from "../../lib/scheduleSnapshot";
@@ -56,6 +57,7 @@ interface Medication {
   active: boolean;
   is_combination: boolean;
   ingredients: string[];
+  quantity?: number;
 }
 
 interface Reminder {
@@ -63,9 +65,13 @@ interface Reminder {
   medicationId: string;
   medicationName: string;
   medicationDosage: string;
-  time: string;
+  times: string[];
   days: string[];
   enabled: boolean;
+  durationType?: "none" | "date-range" | "until-empty";
+  startDate?: string | null;
+  endDate?: string | null;
+  createdAt?: any; // When the reminder was created
 }
 
 interface ScheduleItem {
@@ -102,9 +108,110 @@ interface TakenLog {
 }
 
 // ─────────────────────────────────────────────
-// Helpers
+// Helpers - FIXED scheduling logic for one-time reminders
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Normalize date to midnight for consistent comparison
+ */
+const normalizeDate = (date: Date): Date => {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+};
+
+const getOneTimeReminderDate = (reminder: Reminder): Date => {
+  // Get creation date
+  const createdDate = reminder.createdAt?.toDate
+    ? reminder.createdAt.toDate()
+    : new Date();
+
+  // Get the first time from times array
+  let timeString = "08:00";
+  if (reminder.times && reminder.times.length > 0) {
+    timeString = reminder.times[0];
+  }
+
+  const [hours, minutes] = timeString.split(":").map(Number);
+
+  // Start with the creation date
+  const reminderTime = new Date(createdDate);
+  reminderTime.setHours(hours, minutes, 0, 0);
+
+  const now = new Date();
+
+  // Keep adding days until the reminder time is in the future
+  while (reminderTime <= now) {
+    reminderTime.setDate(reminderTime.getDate() + 1);
+  }
+
+  return normalizeDate(reminderTime);
+};
+
+const isReminderActiveOnDate = (
+  reminder: Reminder,
+  date: Date,
+  medication?: Medication,
+): boolean => {
+  if (!reminder.enabled) return false;
+
+  const normalizedDate = normalizeDate(date);
+
+  // ── createdAt guard: never show before reminder was created ──
+  if (reminder.createdAt) {
+    const createdDate = normalizeDate(
+      reminder.createdAt?.toDate
+        ? reminder.createdAt.toDate()
+        : new Date(reminder.createdAt),
+    );
+    if (normalizedDate < createdDate) return false;
+  }
+
+  // ── One-time reminder (no days selected) ──
+  if (!reminder.days || reminder.days.length === 0) {
+    const scheduledDate = getOneTimeReminderDate(reminder);
+    return normalizedDate.getTime() === scheduledDate.getTime();
+  }
+
+  // ── Day-of-week check ──
+  const dayName = DAY_NAMES[normalizedDate.getDay()];
+  if (!reminder.days.includes(dayName)) return false;
+
+  // ── Date-range duration ──
+  if (reminder.durationType === "date-range") {
+    if (reminder.startDate) {
+      const startDate = normalizeDate(new Date(reminder.startDate));
+      if (normalizedDate < startDate) return false;
+    }
+    if (reminder.endDate) {
+      const endDate = normalizeDate(new Date(reminder.endDate));
+      if (normalizedDate > endDate) return false;
+    }
+  }
+
+  // ── Until-empty duration ──
+  if (reminder.durationType === "until-empty") {
+    if (!medication || medication.quantity === undefined) return false;
+    if (medication.quantity <= 0) return false;
+  }
+
+  return true;
+};
+
+/**
+ * Get reminders for a specific date - FIXED
+ */
+const getRemindersForDate = (
+  date: Date,
+  allReminders: Reminder[],
+  medications: Medication[],
+): Reminder[] => {
+  return allReminders.filter((reminder) => {
+    const medication = medications.find((m) => m.id === reminder.medicationId);
+    return isReminderActiveOnDate(reminder, date, medication);
+  });
+};
 
 function getInteractionSeverity(description: string): "mild" | "severe" {
   const lower = description?.toLowerCase() || "";
@@ -188,8 +295,10 @@ export default function HomeScreen() {
 
   const scrollViewRef = useRef<ScrollView>(null);
   const backfillDone = useRef(false);
-  const today = new Date();
-  const isTodaySelected = selectedDate.toDateString() === today.toDateString();
+  const cleanupDone = useRef(false);
+  const today = normalizeDate(new Date());
+  const isTodaySelected =
+    normalizeDate(selectedDate).getTime() === today.getTime();
 
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
@@ -271,13 +380,21 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // ─── One-time backfill for today ──────────────
+  // ─── Backfill snapshots for today + past 14 days ──────────────
   useEffect(() => {
     if (backfillDone.current || reminders.length === 0) return;
     const userId = auth.currentUser?.uid;
     if (!userId) return;
     backfillDone.current = true;
-    backfillTodaySnapshot(userId, reminders, today).catch(console.warn);
+
+    // ONLY backfill today, not past dates
+    backfillTodaySnapshot(userId, reminders, new Date()).catch(console.warn);
+
+    // ✅ Now using the ref correctly (not calling useRef inside useEffect)
+    if (!cleanupDone.current) {
+      cleanupPastSnapshots(userId).catch(console.warn);
+      cleanupDone.current = true;
+    }
   }, [reminders]);
 
   // ─── Load interactions ────────────────────────
@@ -316,7 +433,7 @@ export default function HomeScreen() {
     setInteractionsLoaded(true);
   };
 
-  // ─── Build schedule ───────────────────────────
+  // ─── Build schedule - FIXED ───────────────────
   useEffect(() => {
     buildSchedule(selectedDate);
   }, [
@@ -329,19 +446,46 @@ export default function HomeScreen() {
   ]);
 
   const buildSchedule = (date: Date) => {
-    const dk = dateKey(date);
-    const sk = snapshotKey(date);
-    const dayName = DAY_NAMES[date.getDay()];
-    const isPastDay = date < new Date(today.toDateString());
-    const isTodayDay = date.toDateString() === today.toDateString();
+    const normalizedDate = normalizeDate(date);
+    const dk = dateKey(normalizedDate);
+    const sk = snapshotKey(normalizedDate);
+    const isPastDay = normalizedDate < today;
+    const isTodayDay = normalizedDate.getTime() === today.getTime();
     const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
     const now = new Date();
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
+    // For past dates - use snapshots
     if (isPastDay) {
       const snapshotItems = snapshots[sk] ?? [];
 
       if (snapshotItems.length === 0) {
+        // No snapshot for this past day — app wasn't open then.
+        // Fall back to computing expected entries from live reminder schedule.
+        const fallbackReminders = getRemindersForDate(
+          normalizedDate,
+          reminders,
+          medications,
+        );
+        const fallbackItems: ScheduleItem[] = fallbackReminders.map((r) => {
+          const takenLog = logsForDate.find((l) => l.reminderId === r.id);
+          return {
+            reminderId: r.id,
+            medicationId: r.medicationId,
+            name: r.medicationName,
+            dosage: r.medicationDosage,
+            time: r.time,
+            taken: !!takenLog,
+            missed: !takenLog,
+            late: false,
+            takenLogId: takenLog?.id,
+            takenVariance: getTakenVariance(r.time, takenLog),
+            hasInteraction: false,
+            interactionSeverity: null,
+            interactionCount: 0,
+          };
+        });
+
         const quickTakesOnly: ScheduleItem[] = logsForDate
           .filter((l) => l.reminderId === "quick-take")
           .map((l) => ({
@@ -361,6 +505,8 @@ export default function HomeScreen() {
             interactionSeverity: null,
             interactionCount: 0,
           }));
+
+        // For past dates, we can't know what was scheduled, so just show taken logs
         quickTakesOnly.sort((a, b) => a.time.localeCompare(b.time));
         setSchedule(quickTakesOnly);
         return;
@@ -411,56 +557,63 @@ export default function HomeScreen() {
       return;
     }
 
-    const dayReminders = reminders.filter((r) => {
-      if (!r.enabled) return false;
-      if (!r.days || r.days.length === 0) return isTodayDay;
-      return r.days.includes(dayName);
-    });
+    // For today and future dates - use the FIXED reminder logic
+    const dayReminders = getRemindersForDate(
+      normalizedDate,
+      reminders,
+      medications,
+    );
 
-    const items: ScheduleItem[] = dayReminders.map((r) => {
-      const med = medications.find((m) => m.id === r.medicationId);
-      const sameDayDrugIds = dayReminders
-        .filter((dr) => dr.medicationId !== r.medicationId)
-        .map((dr) => medications.find((m) => m.id === dr.medicationId)?.drug_id)
-        .filter(Boolean) as string[];
+    const items: ScheduleItem[] = dayReminders.flatMap((r) => {
+      // Create a separate schedule item for each time in the times array
+      return (r.times || ["08:00"]).map((time) => {
+        const med = medications.find((m) => m.id === r.medicationId);
+        const sameDayDrugIds = dayReminders
+          .filter((dr) => dr.medicationId !== r.medicationId)
+          .map(
+            (dr) => medications.find((m) => m.id === dr.medicationId)?.drug_id,
+          )
+          .filter(Boolean) as string[];
 
-      const medInteractions = interactions.filter(
-        (i) =>
-          (i.drug_id === med?.drug_id &&
-            sameDayDrugIds.includes(i.interacts_with)) ||
-          (i.interacts_with === med?.drug_id &&
-            sameDayDrugIds.includes(i.drug_id)),
-      );
+        const medInteractions = interactions.filter(
+          (i) =>
+            (i.drug_id === med?.drug_id &&
+              sameDayDrugIds.includes(i.interacts_with)) ||
+            (i.interacts_with === med?.drug_id &&
+              sameDayDrugIds.includes(i.drug_id)),
+        );
 
-      const hasSevere = medInteractions.some(
-        (i) => getInteractionSeverity(i.description) === "severe",
-      );
-      const takenLog = logsForDate.find((l) => l.reminderId === r.id);
-      const isLate = isTodayDay && !takenLog && r.time < currentTimeStr;
+        const hasSevere = medInteractions.some(
+          (i) => getInteractionSeverity(i.description) === "severe",
+        );
+        const takenLog = logsForDate.find(
+          (l) => l.reminderId === `${r.id}_${time}` || l.reminderId === r.id,
+        );
+        const isLate = isTodayDay && !takenLog && time < currentTimeStr;
 
-      return {
-        reminderId: r.id,
-        medicationId: r.medicationId,
-        name: r.medicationName,
-        dosage: r.medicationDosage,
-        time: r.time,
-        taken: !!takenLog,
-        missed: false,
-        late: isLate,
-        takenLogId: takenLog?.id,
-        takenVariance: getTakenVariance(r.time, takenLog),
-        hasInteraction: medInteractions.length > 0,
-        interactionSeverity:
-          medInteractions.length > 0 ? (hasSevere ? "severe" : "mild") : null,
-        interactionCount: medInteractions.length,
-      };
+        return {
+          reminderId: r.id,
+          medicationId: r.medicationId,
+          name: r.medicationName,
+          dosage: r.medicationDosage,
+          time: time,
+          taken: !!takenLog,
+          missed: false,
+          late: isLate,
+          takenLogId: takenLog?.id,
+          takenVariance: getTakenVariance(time, takenLog),
+          hasInteraction: medInteractions.length > 0,
+          interactionSeverity:
+            medInteractions.length > 0 ? (hasSevere ? "severe" : "mild") : null,
+          interactionCount: medInteractions.length,
+        };
+      });
     });
 
     items.sort((a, b) => a.time.localeCompare(b.time));
     setSchedule(items);
   };
 
-  // ─── Toggle taken ─────────────────────────────
   const toggleTaken = async (item: ScheduleItem) => {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
@@ -495,12 +648,24 @@ export default function HomeScreen() {
         dateKey: dateKey(selectedDate),
       });
 
+      // Check if this reminder has any remaining times for today
       const reminder = reminders.find((r) => r.id === item.reminderId);
       if (reminder && (!reminder.days || reminder.days.length === 0)) {
-        await updateDoc(
-          doc(db, "users", userId, "reminders", item.reminderId),
-          { enabled: false },
+        // For one-time reminders, check if all times are taken
+        const timesForToday = reminder.times || [];
+        const takenLogsForReminder = takenLogs.filter(
+          (log) =>
+            log.reminderId === item.reminderId &&
+            log.dateKey === dateKey(selectedDate),
         );
+
+        // Only disable if all times have been taken
+        if (takenLogsForReminder.length + 1 >= timesForToday.length) {
+          await updateDoc(
+            doc(db, "users", userId, "reminders", item.reminderId),
+            { enabled: false },
+          );
+        }
       }
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to mark as taken");
@@ -578,7 +743,7 @@ export default function HomeScreen() {
   // ─── Navigation ───────────────────────────────
   const scrollToToday = () => {
     const todayIndex = days.findIndex(
-      (d) => d.toDateString() === today.toDateString(),
+      (d) => normalizeDate(d).getTime() === today.getTime(),
     );
     if (todayIndex > -1 && scrollViewRef.current) {
       scrollViewRef.current.scrollTo({
@@ -596,12 +761,12 @@ export default function HomeScreen() {
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
-  // ─── Calendar helpers ─────────────────────────
-  const isToday = (d: Date) => d.toDateString() === today.toDateString();
+  // ─── Calendar helpers - FIXED ─────────────────────────
+  const isToday = (d: Date) => normalizeDate(d).getTime() === today.getTime();
   const isSelected = (d: Date) =>
-    d.toDateString() === selectedDate.toDateString();
-  const isPast = (d: Date) => d < new Date(today.toDateString());
-  const isFuture = (d: Date) => d > new Date(today.toDateString());
+    normalizeDate(d).getTime() === normalizeDate(selectedDate).getTime();
+  const isPast = (d: Date) => normalizeDate(d) < today;
+  const isFuture = (d: Date) => normalizeDate(d) > today;
 
   const formatDate = (date: Date) =>
     date.toLocaleDateString("en-US", {
@@ -612,30 +777,34 @@ export default function HomeScreen() {
     });
 
   const getDayLabel = (date: Date) => {
-    if (isToday(date)) return "Today's Medications";
-    if (isPast(date)) return formatDate(date);
-    return `Upcoming — ${formatDate(date)}`;
+    const normalized = normalizeDate(date);
+    if (isToday(normalized)) return "Today's Medications";
+    if (isPast(normalized)) return formatDate(normalized);
+    return `Upcoming — ${formatDate(normalized)}`;
   };
 
   const getDotStatus = (date: Date): "none" | "grey" | "green" | "red" => {
-    const dayName = DAY_NAMES[date.getDay()];
-    if (isPast(date)) {
-      const sk = snapshotKey(date);
+    const normalizedDate = normalizeDate(date);
+
+    if (isPast(normalizedDate)) {
+      const sk = snapshotKey(normalizedDate);
       const snapshotItems = snapshots[sk] ?? [];
       if (snapshotItems.length === 0) return "none";
-      const dk = dateKey(date);
+      const dk = dateKey(normalizedDate);
       const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
       const anyMissed = snapshotItems.some(
         (s) => !logsForDate.find((l) => l.reminderId === s.reminderId),
       );
       return anyMissed ? "red" : "green";
     }
-    const hasScheduled = reminders.some(
-      (r) =>
-        r.enabled &&
-        (r.days?.includes(dayName) ||
-          ((!r.days || r.days.length === 0) && isToday(date))),
+
+    // FIX: Use the same logic for future dates
+    const remindersForDate = getRemindersForDate(
+      normalizedDate,
+      reminders,
+      medications,
     );
+    const hasScheduled = remindersForDate.length > 0;
     return hasScheduled ? "grey" : "none";
   };
 
@@ -1372,9 +1541,7 @@ export default function HomeScreen() {
   );
 }
 
-// ─────────────────────────────────────────────
 // Styles
-// ─────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   mainHeader: {
@@ -1675,8 +1842,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     maxWidth: 100,
   },
-
-  // Modal
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -1726,8 +1891,6 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: Colors.primary },
   cancelButtonText: { color: Colors.text, fontSize: 16, fontWeight: "600" },
   saveButtonText: { color: Colors.surface, fontSize: 16, fontWeight: "600" },
-
-  // Search suggestions
   suggestionsContainer: {
     backgroundColor: Colors.surface,
     borderWidth: 1,

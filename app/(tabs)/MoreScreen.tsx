@@ -1,4 +1,4 @@
-// app/(tabs)/more.tsx
+// app/(tabs)/more.tsx (updated with button)
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { signOut } from "firebase/auth";
@@ -79,6 +79,27 @@ export default function MoreScreen() {
               </Text>
             </View>
           </View>
+        </View>
+
+        {/* Medication Logs Button - NEW */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.logsButton}
+            onPress={() => router.push("/(tabs)/medication-logs")}
+          >
+            <View style={styles.logsButtonContent}>
+              <View style={styles.logsIconContainer}>
+                <Ionicons name="calendar" size={28} color="#3b82f6" />
+              </View>
+              <View style={styles.logsTextContainer}>
+                <Text style={styles.logsTitle}>Medication Logs</Text>
+                <Text style={styles.logsSubtitle}>
+                  View your medication history and adherence
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Personal Information Section */}
@@ -231,7 +252,7 @@ export default function MoreScreen() {
           <Text style={styles.sectionTitle}>Account Actions</Text>
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => router.push("/caregiver")} // ← adjust path to match your file
+            onPress={() => router.push("/caregiver")}
           >
             <View style={styles.actionButtonContent}>
               <Ionicons name="people-outline" size={24} color="#3b82f6" />
@@ -239,6 +260,7 @@ export default function MoreScreen() {
             </View>
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
+
           <TouchableOpacity style={styles.actionButton}>
             <View style={styles.actionButtonContent}>
               <Ionicons name="create-outline" size={24} color="#3b82f6" />
@@ -349,6 +371,42 @@ const styles = StyleSheet.create({
     color: "#374151",
     marginBottom: 12,
     marginLeft: 8,
+  },
+  // Medication Logs Button Styles
+  logsButton: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  logsButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    gap: 16,
+  },
+  logsIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#eff6ff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  logsTextContainer: {
+    flex: 1,
+  },
+  logsTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a",
+    marginBottom: 4,
+  },
+  logsSubtitle: {
+    fontSize: 13,
+    color: "#64748b",
   },
   infoCard: {
     backgroundColor: "white",

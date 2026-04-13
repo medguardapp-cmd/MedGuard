@@ -75,6 +75,17 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* ✅ Add the Medication Logs screen - hidden from tab bar */}
+      <Tabs.Screen
+        name="medication-logs"
+        options={{
+          href: null, // This hides it from the tab bar
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="calendar-outline" size={22} color={color} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
