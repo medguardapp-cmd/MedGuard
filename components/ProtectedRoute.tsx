@@ -62,7 +62,7 @@ export default function ProtectedRoute({
       !hasPatients &&
       !allowForCaregiverWithNoPatients
     ) {
-      router.replace("/(tabs)/caregiver");
+      router.replace("/(caregiver-only)/connect");
       return;
     }
   }, [

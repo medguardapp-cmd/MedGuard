@@ -22,6 +22,7 @@ import {
   ScrollView,
   Share,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -33,9 +34,8 @@ import { useOnboarding } from "../contexts/OnboardingContext";
 import { auth, db } from "../lib/firebase";
 import {
   CaregiverConnection,
-  PERMISSION_PRESETS,
-  PermissionPreset,
-  getPresetInfo,
+  CaregiverPermissions,
+  getPermissionLabel,
 } from "../types/caregiver";
 
 // ─────────────────────────────────────────────
@@ -105,8 +105,12 @@ export default function CaregiverScreen() {
   const [permissionModalVisible, setPermissionModalVisible] = useState(false);
   const [selectedConnection, setSelectedConnection] =
     useState<CaregiverConnection | null>(null);
-  const [selectedPreset, setSelectedPreset] =
-    useState<PermissionPreset>("view_only");
+  const [selectedPermissions, setSelectedPermissions] =
+    useState<CaregiverPermissions>({
+      canManageReminders: false,
+      canMarkAsTaken: false,
+      canManageHealth: false,
+    });
 
   const userId = auth.currentUser?.uid;
   const userEmail = auth.currentUser?.email ?? "";
@@ -313,6 +317,11 @@ export default function CaregiverScreen() {
         connectedAt: serverTimestamp(),
         status: "pending",
         permissionPreset: "view_only",
+        permissions: {
+          canManageReminders: false,
+          canMarkAsTaken: false,
+          canManageHealth: false,
+        },
       });
       setInputCode("");
       Alert.alert(
@@ -328,7 +337,13 @@ export default function CaregiverScreen() {
   // ─── Patient: approve with permissions ─────────
   const handleApproveWithPermissions = (connection: CaregiverConnection) => {
     setSelectedConnection(connection);
-    setSelectedPreset(connection.permissionPreset || "view_only");
+    setSelectedPermissions(
+      connection.permissions || {
+        canManageReminders: false,
+        canMarkAsTaken: false,
+        canManageHealth: false,
+      },
+    );
     setPermissionModalVisible(true);
   };
 
@@ -338,23 +353,29 @@ export default function CaregiverScreen() {
     await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
       status: "approved",
       approvedAt: serverTimestamp(),
-      permissionPreset: selectedPreset,
-      permissions: PERMISSION_PRESETS[selectedPreset],
+      permissions: selectedPermissions,
     });
 
+    const permissionLabel = getPermissionLabel(selectedPermissions);
     Alert.alert(
       "Connected",
-      `${selectedConnection.caregiverName} can now access your information with ${getPresetDisplayName(selectedPreset)} permissions.`,
+      `${selectedConnection.caregiverName} can now access your information with ${permissionLabel} permissions.`,
     );
 
     setPermissionModalVisible(false);
     setSelectedConnection(null);
   };
 
-  // ─── Patient: update permissions ──────────────
+  // ✅ USE THIS NEW VERSION
   const handleUpdatePermissions = (connection: CaregiverConnection) => {
     setSelectedConnection(connection);
-    setSelectedPreset(connection.permissionPreset || "view_only");
+    setSelectedPermissions(
+      connection.permissions || {
+        canManageReminders: false,
+        canMarkAsTaken: false,
+        canManageHealth: false,
+      },
+    );
     setPermissionModalVisible(true);
   };
 
@@ -362,14 +383,14 @@ export default function CaregiverScreen() {
     if (!selectedConnection) return;
 
     await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
-      permissionPreset: selectedPreset,
-      permissions: PERMISSION_PRESETS[selectedPreset],
+      permissions: selectedPermissions,
       permissionsUpdatedAt: serverTimestamp(),
     });
 
+    const permissionLabel = getPermissionLabel(selectedPermissions);
     Alert.alert(
       "Permissions Updated",
-      `${selectedConnection.caregiverName}'s permissions have been updated to ${getPresetDisplayName(selectedPreset)}.`,
+      `${selectedConnection.caregiverName}'s permissions have been updated to ${permissionLabel}.`,
     );
 
     setPermissionModalVisible(false);
@@ -436,19 +457,21 @@ export default function CaregiverScreen() {
   // ─── Permission Modal ─────────────────────────
   // ─── Permission Modal (FIXED - No jumping/disappearing) ─────────
   const PermissionModal = () => {
-    // Use local state to prevent re-renders from affecting the modal
-    const [localSelectedPreset, setLocalSelectedPreset] =
-      useState<PermissionPreset>(selectedPreset);
+    const [localPermissions, setLocalPermissions] =
+      useState<CaregiverPermissions>({
+        canManageReminders: false,
+        canMarkAsTaken: false,
+        canManageHealth: false,
+      });
 
-    // Update local state when modal opens
     useEffect(() => {
       if (permissionModalVisible) {
-        setLocalSelectedPreset(selectedPreset);
+        setLocalPermissions(selectedPermissions);
       }
-    }, [permissionModalVisible, selectedPreset]);
+    }, [permissionModalVisible, selectedPermissions]);
 
-    const handleSelectPreset = (preset: PermissionPreset) => {
-      setLocalSelectedPreset(preset);
+    const togglePermission = (key: keyof CaregiverPermissions) => {
+      setLocalPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
     };
 
     const handleConfirm = async () => {
@@ -458,14 +481,13 @@ export default function CaregiverScreen() {
         await updateDoc(
           doc(db, "caregiver_connections", selectedConnection.id),
           {
-            permissionPreset: localSelectedPreset,
-            permissions: PERMISSION_PRESETS[localSelectedPreset],
+            permissions: localPermissions,
             permissionsUpdatedAt: serverTimestamp(),
           },
         );
         Alert.alert(
           "Permissions Updated",
-          `${selectedConnection.caregiverName}'s permissions have been updated to ${getPresetDisplayName(localSelectedPreset)}.`,
+          `${selectedConnection.caregiverName}'s permissions have been updated.`,
         );
       } else {
         await updateDoc(
@@ -473,24 +495,36 @@ export default function CaregiverScreen() {
           {
             status: "approved",
             approvedAt: serverTimestamp(),
-            permissionPreset: localSelectedPreset,
-            permissions: PERMISSION_PRESETS[localSelectedPreset],
+            permissions: localPermissions,
           },
         );
         Alert.alert(
           "Connected",
-          `${selectedConnection.caregiverName} can now access your information with ${getPresetDisplayName(localSelectedPreset)} permissions.`,
+          `${selectedConnection.caregiverName} can now access your information.`,
         );
       }
 
       setPermissionModalVisible(false);
       setSelectedConnection(null);
-      setSelectedPreset(localSelectedPreset);
+      setSelectedPermissions(localPermissions);
     };
 
     const handleCancel = () => {
       setPermissionModalVisible(false);
       setSelectedConnection(null);
+    };
+
+    const getPermissionSummary = () => {
+      const labels = [];
+      if (localPermissions.canManageReminders) labels.push("manage reminders");
+      if (localPermissions.canMarkAsTaken)
+        labels.push("mark medications as taken");
+      if (localPermissions.canManageHealth)
+        labels.push("manage health records");
+
+      if (labels.length === 0) return "View Only";
+      if (labels.length === 3) return "Full Access";
+      return labels.join(", ");
     };
 
     return (
@@ -519,77 +553,167 @@ export default function CaregiverScreen() {
                 : `Choose what ${selectedConnection?.caregiverName} can access`}
             </Text>
 
-            <Text style={styles.presetHelpText}>
-              Select a permission level:
+            <Text style={styles.permissionSummaryText}>
+              Current selection:{" "}
+              <Text style={styles.permissionSummaryHighlight}>
+                {getPermissionSummary()}
+              </Text>
             </Text>
 
-            <ScrollView
-              style={{ maxHeight: 400 }}
-              showsVerticalScrollIndicator={false}
-            >
-              {(
-                [
-                  "view_only",
-                  "reminder_assistant",
-                  "adherence_helper",
-                  "health_assistant",
-                  "full_access",
-                ] as PermissionPreset[]
-              ).map((preset) => {
-                const info = getPresetInfo(preset);
-                return (
-                  <TouchableOpacity
-                    key={preset}
-                    style={[
-                      styles.presetOption,
-                      localSelectedPreset === preset &&
-                        styles.presetOptionSelected,
-                      { borderLeftColor: info.color },
-                    ]}
-                    onPress={() => handleSelectPreset(preset)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.presetHeader}>
-                      <View style={styles.presetTitleContainer}>
-                        <Text style={styles.presetIcon}>{info.icon}</Text>
-                        <Text
-                          style={[
-                            styles.presetName,
-                            localSelectedPreset === preset &&
-                              styles.presetNameSelected,
-                          ]}
-                        >
-                          {info.name}
-                        </Text>
-                      </View>
-                      {localSelectedPreset === preset && (
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={22}
-                          color={Colors.primary}
-                        />
-                      )}
-                    </View>
-                    <Text style={styles.presetDescription}>
-                      {info.description}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+            {/* Manage Reminders Toggle */}
+            <View style={styles.toggleOption}>
+              <View style={styles.toggleHeader}>
+                <View style={styles.toggleIconContainer}>
+                  <Ionicons
+                    name="alarm-outline"
+                    size={22}
+                    color={Colors.primary}
+                  />
+                </View>
+                <View style={styles.toggleTextContainer}>
+                  <Text style={styles.toggleTitle}>Manage Reminders</Text>
+                  <Text style={styles.toggleDescription}>
+                    Create, edit, and delete medication reminders
+                  </Text>
+                </View>
+                <Switch
+                  value={localPermissions.canManageReminders}
+                  onValueChange={() => togglePermission("canManageReminders")}
+                  trackColor={{
+                    false: Colors.border,
+                    true: Colors.primary + "80",
+                  }}
+                  thumbColor={
+                    localPermissions.canManageReminders
+                      ? Colors.primary
+                      : Colors.textTertiary
+                  }
+                />
+              </View>
+            </View>
+
+            {/* Mark as Taken Toggle */}
+            <View style={styles.toggleOption}>
+              <View style={styles.toggleHeader}>
+                <View style={styles.toggleIconContainer}>
+                  <Ionicons
+                    name="checkmark-circle-outline"
+                    size={22}
+                    color={Colors.success}
+                  />
+                </View>
+                <View style={styles.toggleTextContainer}>
+                  <Text style={styles.toggleTitle}>
+                    Mark Medications as Taken
+                  </Text>
+                  <Text style={styles.toggleDescription}>
+                    Track adherence by marking when medications are taken
+                  </Text>
+                </View>
+                <Switch
+                  value={localPermissions.canMarkAsTaken}
+                  onValueChange={() => togglePermission("canMarkAsTaken")}
+                  trackColor={{
+                    false: Colors.border,
+                    true: Colors.success + "80",
+                  }}
+                  thumbColor={
+                    localPermissions.canMarkAsTaken
+                      ? Colors.success
+                      : Colors.textTertiary
+                  }
+                />
+              </View>
+            </View>
+
+            {/* Manage Health Records Toggle */}
+            <View style={styles.toggleOption}>
+              <View style={styles.toggleHeader}>
+                <View style={styles.toggleIconContainer}>
+                  <Ionicons
+                    name="medical-outline"
+                    size={22}
+                    color={Colors.warning}
+                  />
+                </View>
+                <View style={styles.toggleTextContainer}>
+                  <Text style={styles.toggleTitle}>Manage Health Records</Text>
+                  <Text style={styles.toggleDescription}>
+                    View and edit health conditions, allergies, and notes
+                  </Text>
+                </View>
+                <Switch
+                  value={localPermissions.canManageHealth}
+                  onValueChange={() => togglePermission("canManageHealth")}
+                  trackColor={{
+                    false: Colors.border,
+                    true: Colors.warning + "80",
+                  }}
+                  thumbColor={
+                    localPermissions.canManageHealth
+                      ? Colors.warning
+                      : Colors.textTertiary
+                  }
+                />
+              </View>
+            </View>
+
+            {/* Quick Select Buttons */}
+            <View style={styles.quickSelectContainer}>
+              <Text style={styles.quickSelectLabel}>Quick select:</Text>
+              <View style={styles.quickSelectRow}>
+                <TouchableOpacity
+                  style={styles.quickSelectButton}
+                  onPress={() =>
+                    setLocalPermissions({
+                      canManageReminders: false,
+                      canMarkAsTaken: false,
+                      canManageHealth: false,
+                    })
+                  }
+                >
+                  <Text style={styles.quickSelectText}>View Only</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.quickSelectButton}
+                  onPress={() =>
+                    setLocalPermissions({
+                      canManageReminders: true,
+                      canMarkAsTaken: true,
+                      canManageHealth: false,
+                    })
+                  }
+                >
+                  <Text style={styles.quickSelectText}>Helper</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.quickSelectButton,
+                    styles.quickSelectFullButton,
+                  ]}
+                  onPress={() =>
+                    setLocalPermissions({
+                      canManageReminders: true,
+                      canMarkAsTaken: true,
+                      canManageHealth: true,
+                    })
+                  }
+                >
+                  <Text style={styles.quickSelectText}>Full Access</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
 
             <View style={styles.modalFooter}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={handleCancel}
-                activeOpacity={0.7}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.saveButton]}
                 onPress={handleConfirm}
-                activeOpacity={0.7}
               >
                 <Text style={styles.saveButtonText}>
                   {selectedConnection?.status === "approved"
@@ -629,7 +753,7 @@ export default function CaregiverScreen() {
           <Text style={styles.connectionName}>{name}</Text>
           <Text style={styles.connectionEmail}>{email}</Text>
           <Text style={styles.connectionDate}>{dateLabel}</Text>
-          {variant === "disconnect" && conn.permissionPreset && (
+          {variant === "disconnect" && conn.permissions && (
             <View style={styles.permissionBadge}>
               <Ionicons
                 name="shield-checkmark"
@@ -637,7 +761,7 @@ export default function CaregiverScreen() {
                 color={Colors.primary}
               />
               <Text style={styles.permissionBadgeText}>
-                {getPresetDisplayName(conn.permissionPreset)}
+                {getPermissionLabel(conn.permissions)}
               </Text>
             </View>
           )}
@@ -1389,5 +1513,81 @@ const styles = StyleSheet.create({
   summaryText: {
     fontSize: 11,
     color: Colors.textTertiary,
+  },
+  // Add these styles
+  toggleOption: {
+    marginBottom: 20,
+    padding: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  toggleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  toggleIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primary + "10",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  toggleTextContainer: {
+    flex: 1,
+  },
+  toggleTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  toggleDescription: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  permissionSummaryText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 20,
+    padding: 12,
+    backgroundColor: Colors.primary + "05",
+    borderRadius: 8,
+  },
+  permissionSummaryHighlight: {
+    fontWeight: "600",
+    color: Colors.primary,
+  },
+  quickSelectContainer: {
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  quickSelectLabel: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  quickSelectRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  quickSelectButton: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.border + "30",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  quickSelectFullButton: {
+    backgroundColor: Colors.primary + "20",
+  },
+  quickSelectText: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: Colors.text,
   },
 });

@@ -12,6 +12,7 @@ import {
   query,
   serverTimestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -28,10 +29,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
+import { useSelectedPatient } from "../../contexts/SelectedPatientContext";
+import { useCaregiverPermissions } from "../../hooks/useCaregiverPermissions";
 import { auth, db } from "../../lib/firebase";
 import {
   backfillTodaySnapshot,
-  cleanupPastSnapshots,
   SnapshotItem,
   snapshotKey,
 } from "../../lib/scheduleSnapshot";
@@ -300,6 +302,12 @@ export default function HomeScreen() {
   const isTodaySelected =
     normalizeDate(selectedDate).getTime() === today.getTime();
 
+  // ✅ ADD THESE MISSING STATE DECLARATIONS:
+  const { selectedPatientId, setSelectedPatientId, userType } =
+    useSelectedPatient();
+  const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
+  const [showPatientSelector, setShowPatientSelector] = useState(false);
+
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
     const days = [];
@@ -314,19 +322,36 @@ export default function HomeScreen() {
   };
   const days = generateDays();
 
+  // Add permission check for caregivers
+  const { can, loading: permissionsLoading } = useCaregiverPermissions({
+    patientId: userType === "caregiver" ? selectedPatientId || "" : "",
+    caregiverId: userType === "caregiver" ? auth.currentUser?.uid || "" : "",
+  });
+
+  // Create safeCan based on user type
+  const safeCan = {
+    markAsTaken: () =>
+      userType === "caregiver" ? (can?.markAsTaken() ?? false) : true,
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => scrollToToday(), 100);
     return () => clearTimeout(timer);
   }, []);
 
   // ─── Firebase listeners ───────────────────────
+  // ─── Firebase listeners ───────────────────────
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+
+    if (!targetUserId) return;
+
+    console.log("📋 Loading data for user:", targetUserId);
 
     const unsubMeds = onSnapshot(
       query(
-        collection(db, "users", userId, "medications"),
+        collection(db, "users", targetUserId, "medications"),
         orderBy("createdAt", "desc"),
       ),
       (snap) => {
@@ -338,7 +363,7 @@ export default function HomeScreen() {
     );
 
     const unsubReminders = onSnapshot(
-      collection(db, "users", userId, "reminders"),
+      collection(db, "users", targetUserId, "reminders"),
       (snap) => {
         setReminders(
           snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Reminder[],
@@ -347,7 +372,7 @@ export default function HomeScreen() {
     );
 
     const unsubTaken = onSnapshot(
-      collection(db, "users", userId, "taken_logs"),
+      collection(db, "users", targetUserId, "taken_logs"),
       (snap) => {
         setTakenLogs(
           snap.docs.map((d) => ({ id: d.id, ...d.data() })) as TakenLog[],
@@ -363,7 +388,7 @@ export default function HomeScreen() {
           d.setDate(today.getDate() - (i + 1));
           const sk = snapshotKey(d);
           return getDoc(
-            doc(db, "users", userId, "schedule_snapshots", sk),
+            doc(db, "users", targetUserId, "schedule_snapshots", sk),
           ).then((snap) => {
             if (snap.exists()) cache[sk] = snap.data()?.items ?? [];
           });
@@ -378,24 +403,28 @@ export default function HomeScreen() {
       unsubReminders();
       unsubTaken();
     };
-  }, []);
+  }, [selectedPatientId, userType]);
 
   // ─── Backfill snapshots for today + past 14 days ──────────────
+  // In index.tsx, update the backfill useEffect
   useEffect(() => {
     if (backfillDone.current || reminders.length === 0) return;
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+    if (!targetUserId) return;
     backfillDone.current = true;
 
     // ONLY backfill today, not past dates
-    backfillTodaySnapshot(userId, reminders, new Date()).catch(console.warn);
+    backfillTodaySnapshot(targetUserId, reminders, new Date()).catch(
+      console.warn,
+    );
 
-    // ✅ Now using the ref correctly (not calling useRef inside useEffect)
-    if (!cleanupDone.current) {
-      cleanupPastSnapshots(userId).catch(console.warn);
-      cleanupDone.current = true;
-    }
-  }, [reminders]);
+    // ✅ REMOVE THIS ENTIRE BLOCK
+    // if (!cleanupDone.current) {
+    //   cleanupPastSnapshots(targetUserId).catch(console.warn);
+    //   cleanupDone.current = true;
+    // }
+  }, [reminders, userType, selectedPatientId]); // Also add missing dependencies
 
   // ─── Load interactions ────────────────────────
   useEffect(() => {
@@ -444,6 +473,33 @@ export default function HomeScreen() {
     takenLogs,
     snapshots,
   ]);
+  // Add after the other useEffects (around line 250)
+  // Load patients for caregivers
+  useEffect(() => {
+    const userId = auth.currentUser?.uid;
+    if (!userId || userType !== "caregiver") return;
+
+    const q = query(
+      collection(db, "caregiver_connections"),
+      where("caregiverId", "==", userId),
+      where("status", "==", "approved"),
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const patientList = snapshot.docs.map((doc) => ({
+        id: doc.data().patientId,
+        name: doc.data().patientName,
+      }));
+      setPatients(patientList);
+
+      // Auto-select first patient if none selected
+      if (patientList.length > 0 && !selectedPatientId) {
+        setSelectedPatientId(patientList[0].id);
+      }
+    });
+
+    return unsubscribe;
+  }, [userType, selectedPatientId]);
 
   const buildSchedule = (date: Date) => {
     const normalizedDate = normalizeDate(date);
@@ -455,38 +511,45 @@ export default function HomeScreen() {
     const now = new Date();
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-    // For past dates - use snapshots
     if (isPastDay) {
       const snapshotItems = snapshots[sk] ?? [];
+      console.log(
+        `Past date ${dk}: ${snapshotItems.length} snapshot items, ${logsForDate.length} taken logs`,
+      );
 
       if (snapshotItems.length === 0) {
-        // No snapshot for this past day — app wasn't open then.
-        // Fall back to computing expected entries from live reminder schedule.
-        const fallbackReminders = getRemindersForDate(
+        // No snapshot exists - calculate from current reminders
+        console.log(
+          "📸 No snapshot found, calculating from reminders for:",
+          normalizedDate,
+        );
+
+        const pastReminders = getRemindersForDate(
           normalizedDate,
           reminders,
           medications,
         );
-        const fallbackItems: ScheduleItem[] = fallbackReminders.map((r) => {
-          const takenLog = logsForDate.find((l) => l.reminderId === r.id);
-          return {
-            reminderId: r.id,
-            medicationId: r.medicationId,
-            name: r.medicationName,
-            dosage: r.medicationDosage,
-            time: r.time,
-            taken: !!takenLog,
-            missed: !takenLog,
-            late: false,
-            takenLogId: takenLog?.id,
-            takenVariance: getTakenVariance(r.time, takenLog),
-            hasInteraction: false,
-            interactionSeverity: null,
-            interactionCount: 0,
-          };
+        const calculatedItems: ScheduleItem[] = pastReminders.flatMap((r) => {
+          return (r.times || ["08:00"]).map((time) => {
+            const takenLog = logsForDate.find((l) => l.reminderId === r.id);
+            return {
+              reminderId: r.id,
+              medicationId: r.medicationId,
+              name: r.medicationName,
+              dosage: r.medicationDosage,
+              time: time,
+              taken: !!takenLog,
+              missed: !takenLog, // ✅ Mark as missed if not taken
+              late: false,
+              takenLogId: takenLog?.id,
+              takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
+              hasInteraction: false,
+              interactionSeverity: null,
+              interactionCount: 0,
+            };
+          });
         });
-
-        const quickTakesOnly: ScheduleItem[] = logsForDate
+        const quickTakes: ScheduleItem[] = logsForDate
           .filter((l) => l.reminderId === "quick-take")
           .map((l) => ({
             reminderId: l.id,
@@ -506,12 +569,11 @@ export default function HomeScreen() {
             interactionCount: 0,
           }));
 
-        // For past dates, we can't know what was scheduled, so just show taken logs
-        quickTakesOnly.sort((a, b) => a.time.localeCompare(b.time));
-        setSchedule(quickTakesOnly);
+        const all = [...calculatedItems, ...quickTakes];
+        all.sort((a, b) => a.time.localeCompare(b.time));
+        setSchedule(all);
         return;
       }
-
       const scheduledItems: ScheduleItem[] = snapshotItems.map((s) => {
         const takenLog = logsForDate.find((l) => l.reminderId === s.reminderId);
         return {
@@ -521,10 +583,10 @@ export default function HomeScreen() {
           dosage: s.dosage,
           time: s.time,
           taken: !!takenLog,
-          missed: !takenLog,
+          missed: !takenLog, // ✅ Mark as missed if not taken
           late: false,
           takenLogId: takenLog?.id,
-          takenVariance: getTakenVariance(s.time, takenLog),
+          takenVariance: takenLog ? getTakenVariance(s.time, takenLog) : null,
           hasInteraction: false,
           interactionSeverity: null,
           interactionCount: 0,
@@ -557,15 +619,12 @@ export default function HomeScreen() {
       return;
     }
 
-    // For today and future dates - use the FIXED reminder logic
     const dayReminders = getRemindersForDate(
       normalizedDate,
       reminders,
       medications,
     );
-
     const items: ScheduleItem[] = dayReminders.flatMap((r) => {
-      // Create a separate schedule item for each time in the times array
       return (r.times || ["08:00"]).map((time) => {
         const med = medications.find((m) => m.id === r.medicationId);
         const sameDayDrugIds = dayReminders
@@ -601,7 +660,7 @@ export default function HomeScreen() {
           missed: false,
           late: isLate,
           takenLogId: takenLog?.id,
-          takenVariance: getTakenVariance(time, takenLog),
+          takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
           hasInteraction: medInteractions.length > 0,
           interactionSeverity:
             medInteractions.length > 0 ? (hasSevere ? "severe" : "mild") : null,
@@ -615,6 +674,14 @@ export default function HomeScreen() {
   };
 
   const toggleTaken = async (item: ScheduleItem) => {
+    if (!safeCan.markAsTaken()) {
+      Alert.alert(
+        "Permission Denied",
+        "You don't have permission to mark medications as taken for this patient.",
+      );
+      return;
+    }
+
     const userId = auth.currentUser?.uid;
     if (!userId) return;
 
@@ -761,6 +828,12 @@ export default function HomeScreen() {
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
+  const refreshDataForPatient = useCallback(async (patientId: string) => {
+    const userId = patientId;
+
+    setInteractionsLoaded(false);
+  }, []);
+
   // ─── Calendar helpers - FIXED ─────────────────────────
   const isToday = (d: Date) => normalizeDate(d).getTime() === today.getTime();
   const isSelected = (d: Date) =>
@@ -858,6 +931,50 @@ export default function HomeScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
+        {/* Patient Selector for Caregivers */}
+        {patients.length > 0 && (
+          <View style={styles.patientSelectorContainer}>
+            <Text style={styles.patientSelectorLabel}>Patient:</Text>
+            <TouchableOpacity
+              style={styles.patientSelectorButton}
+              onPress={() => setShowPatientSelector(!showPatientSelector)}
+            >
+              <Text style={styles.patientSelectorText}>
+                {patients.find((p) => p.id === selectedPatientId)?.name ||
+                  "Select Patient"}
+              </Text>
+              <Ionicons name="chevron-down" size={18} color={Colors.text} />
+            </TouchableOpacity>
+
+            {showPatientSelector && (
+              <View style={styles.patientDropdown}>
+                {patients.map((patient) => (
+                  <TouchableOpacity
+                    key={patient.id}
+                    style={styles.patientDropdownItem}
+                    onPress={() => {
+                      setSelectedPatientId(patient.id);
+                      setShowPatientSelector(false);
+                      // Refresh data with new patient
+                      refreshDataForPatient(patient.id);
+                    }}
+                  >
+                    <Text style={styles.patientDropdownText}>
+                      {patient.name}
+                    </Text>
+                    {selectedPatientId === patient.id && (
+                      <Ionicons
+                        name="checkmark"
+                        size={18}
+                        color={Colors.primary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
         {/* Date Header */}
         <View style={styles.header}>
           <View style={styles.headerTopRow}>
@@ -1157,8 +1274,10 @@ export default function HomeScreen() {
                       style={[
                         styles.takeButton,
                         item.taken && styles.takenButton,
+                        !safeCan.markAsTaken() && styles.disabledButton, // Add disabled style
                       ]}
                       onPress={() => toggleTaken(item)}
+                      disabled={!safeCan.markAsTaken()} // Disable if no permission
                     >
                       <Text
                         style={[
@@ -1212,8 +1331,10 @@ export default function HomeScreen() {
                   style={[
                     styles.takeButton,
                     { marginTop: 16, paddingHorizontal: 20 },
+                    !safeCan.markAsTaken() && styles.disabledButton,
                   ]}
                   onPress={() => openQuickTake()}
+                  disabled={!safeCan.markAsTaken()}
                 >
                   <Text style={styles.takeButtonText}>Log a dose</Text>
                 </TouchableOpacity>
@@ -1359,16 +1480,31 @@ export default function HomeScreen() {
                     .map((med) => (
                       <TouchableOpacity
                         key={med.id}
-                        style={styles.quickTakeChip}
-                        onPress={() => openQuickTake(med)}
+                        style={[
+                          styles.quickTakeChip,
+                          !safeCan.markAsTaken() && styles.disabledChip,
+                        ]}
+                        onPress={() =>
+                          safeCan.markAsTaken() && openQuickTake(med)
+                        }
+                        disabled={!safeCan.markAsTaken()}
                       >
                         <Ionicons
                           name="medical"
                           size={14}
-                          color={Colors.primary}
+                          color={
+                            !safeCan.markAsTaken()
+                              ? Colors.textTertiary
+                              : Colors.primary
+                          }
                         />
                         <Text
-                          style={styles.quickTakeChipText}
+                          style={[
+                            styles.quickTakeChipText,
+                            !safeCan.markAsTaken() && {
+                              color: Colors.textTertiary,
+                            },
+                          ]}
                           numberOfLines={1}
                         >
                           {med.name}
@@ -1376,18 +1512,31 @@ export default function HomeScreen() {
                       </TouchableOpacity>
                     ))}
                   <TouchableOpacity
-                    style={[styles.quickTakeChip, { borderStyle: "dashed" }]}
-                    onPress={() => openQuickTake()}
+                    style={[
+                      styles.quickTakeChip,
+                      { borderStyle: "dashed" },
+                      !safeCan.markAsTaken() && styles.disabledChip,
+                    ]}
+                    onPress={() => safeCan.markAsTaken() && openQuickTake()}
+                    disabled={!safeCan.markAsTaken()}
                   >
                     <Ionicons
                       name="add"
                       size={14}
-                      color={Colors.textSecondary}
+                      color={
+                        !safeCan.markAsTaken()
+                          ? Colors.textTertiary
+                          : Colors.textSecondary
+                      }
                     />
                     <Text
                       style={[
                         styles.quickTakeChipText,
-                        { color: Colors.textSecondary },
+                        {
+                          color: !safeCan.markAsTaken()
+                            ? Colors.textTertiary
+                            : Colors.textSecondary,
+                        },
                       ]}
                     >
                       Other
@@ -1939,4 +2088,69 @@ const styles = StyleSheet.create({
   suggestionLoadingText: { fontSize: 14, color: Colors.textSecondary },
   suggestionEmpty: { padding: 12 },
   suggestionEmptyText: { fontSize: 14, color: Colors.textSecondary },
+  patientSelectorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: Colors.primary,
+    borderBottomColor: Colors.border,
+  },
+  patientSelectorLabel: {
+    fontSize: 14,
+    color: Colors.background,
+    marginRight: 8,
+    fontWeight: "500",
+  },
+  patientSelectorButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.background,
+    borderRadius: 8,
+  },
+  patientSelectorText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: Colors.primary,
+  },
+  patientDropdown: {
+    position: "absolute",
+    top: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+    zIndex: 1000,
+  },
+  patientDropdownItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  patientDropdownText: {
+    fontSize: 14,
+    color: Colors.text,
+  },
+  disabledButton: {
+    opacity: 0.5,
+    backgroundColor: Colors.textTertiary,
+  },
+  disabledChip: {
+    opacity: 0.5,
+    borderColor: Colors.textTertiary,
+  },
 });
+function cleanupPastSnapshots(targetUserId: any) {
+  throw new Error("Function not implemented.");
+}

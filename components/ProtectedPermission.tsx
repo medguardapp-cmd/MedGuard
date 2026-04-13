@@ -1,6 +1,7 @@
 // components/ProtectedPermission.tsx
+import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import Colors from "../constants/colors";
 import { useCaregiverPermissions } from "../hooks/useCaregiverPermissions";
 

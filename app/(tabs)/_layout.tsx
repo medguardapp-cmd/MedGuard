@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { Colors } from "@/constants/theme";
+import { SelectedPatientProvider } from "@/contexts/SelectedPatientContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 
 export default function TabLayout() {
@@ -15,69 +16,71 @@ export default function TabLayout() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarShowLabel: false,
-        tabBarActiveTintColor: tint,
-        tabBarInactiveTintColor: "#999",
-        tabBarButton: HapticTab,
-        tabBarStyle: [styles.tabBar, { bottom: insets.bottom + 5 }],
-        tabBarItemStyle: styles.item,
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="home-outline" size={22} color={color} />
-          ),
+    <SelectedPatientProvider>
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarShowLabel: false,
+          tabBarActiveTintColor: tint,
+          tabBarInactiveTintColor: "#999",
+          tabBarButton: HapticTab,
+          tabBarStyle: [styles.tabBar, { bottom: insets.bottom + 5 }],
+          tabBarItemStyle: styles.item,
         }}
-      />
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="home-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
-      <Tabs.Screen
-        name="MedicationsScreen"
-        options={{
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="medkit-outline" size={22} color={color} />
-          ),
-        }}
-      />
+        <Tabs.Screen
+          name="MedicationsScreen"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="medkit-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
-      <Tabs.Screen
-        name="ScanScreen"
-        options={{
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="scan-outline" size={22} color={color} />
-          ),
-        }}
-      />
+        <Tabs.Screen
+          name="ScanScreen"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="scan-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
-      <Tabs.Screen
-        name="AssistantScreen"
-        options={{
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="chatbubble-outline" size={22} color={color} />
-          ),
-        }}
-      />
+        <Tabs.Screen
+          name="AssistantScreen"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="chatbubble-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
-      <Tabs.Screen
-        name="MoreScreen"
-        options={{
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="menu-outline" size={22} color={color} />
-          ),
-        }}
-      />
+        <Tabs.Screen
+          name="MoreScreen"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="menu-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
-      <Tabs.Screen
-        name="medication-logs"
-        options={{
-          href: null,
-        }}
-      />
-    </Tabs>
+        <Tabs.Screen
+          name="medication-logs"
+          options={{
+            href: null,
+          }}
+        />
+      </Tabs>
+    </SelectedPatientProvider>
   );
 }
 

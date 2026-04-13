@@ -1,11 +1,8 @@
 // hooks/useCaregiverPermissions.ts
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { db } from "../lib/firebase";
-import {
-    CaregiverPermissions,
-    PERMISSION_PRESETS,
-    PermissionPreset,
-} from "../types/caregiver";
+import { CaregiverPermissions } from "../types/caregiver";
 
 interface UseCaregiverPermissionsProps {
   patientId: string;
@@ -30,7 +27,6 @@ export const useCaregiverPermissions = ({
       }
 
       try {
-        // Query the connection
         const connectionsRef = collection(db, "caregiver_connections");
         const q = query(
           connectionsRef,
@@ -43,8 +39,7 @@ export const useCaregiverPermissions = ({
 
         if (!snapshot.empty) {
           const connection = snapshot.docs[0].data();
-          const preset = connection.permissionPreset as PermissionPreset;
-          const perms = PERMISSION_PRESETS[preset];
+          const perms = connection.permissions as CaregiverPermissions;
           setPermissions(perms);
           setHasAccess(true);
         } else {
@@ -63,26 +58,21 @@ export const useCaregiverPermissions = ({
     fetchPermissions();
   }, [patientId, caregiverId]);
 
-  // Helper functions for checking specific permissions
+  // ✅ FIXED: Map to your 3 actual permission fields
   const can = {
-    viewMedications: () => permissions?.canViewMedications ?? false,
-    addMedications: () => permissions?.canAddMedications ?? false,
-    editMedications: () => permissions?.canEditMedications ?? false,
-    deleteMedications: () => permissions?.canDeleteMedications ?? false,
+    // All medication management uses canManageReminders
+    addMedications: () => permissions?.canManageReminders ?? false,
+    editMedications: () => permissions?.canManageReminders ?? false,
+    deleteMedications: () => permissions?.canManageReminders ?? false,
+
+    // Reminders
+    manageReminders: () => permissions?.canManageReminders ?? false,
+
+    // Adherence
     markAsTaken: () => permissions?.canMarkAsTaken ?? false,
-    viewLogs: () => permissions?.canViewLogs ?? false,
-    exportLogs: () => permissions?.canExportLogs ?? false,
-    viewReminders: () => permissions?.canViewReminders ?? false,
-    createReminders: () => permissions?.canCreateReminders ?? false,
-    editReminders: () => permissions?.canEditReminders ?? false,
-    deleteReminders: () => permissions?.canDeleteReminders ?? false,
-    viewHealthRecords: () => permissions?.canViewHealthRecords ?? false,
-    editHealthRecords: () => permissions?.canEditHealthRecords ?? false,
-    viewNotes: () => permissions?.canViewNotes ?? false,
-    addNotes: () => permissions?.canAddNotes ?? false,
-    receiveAlerts: () => permissions?.canReceiveAlerts ?? false,
-    receiveReports: () => permissions?.canReceiveReports ?? false,
-    viewEmergencyInfo: () => permissions?.canViewEmergencyInfo ?? false,
+
+    // Health Records
+    manageHealth: () => permissions?.canManageHealth ?? false,
   };
 
   return { permissions, loading, hasAccess, can };

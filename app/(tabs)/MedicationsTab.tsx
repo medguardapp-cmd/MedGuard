@@ -29,6 +29,11 @@ interface MedicationsTabProps {
   onAddReminder: () => void;
   onEditMedication: (medication: Medication) => void;
   onDeleteMedication: (id: string) => void;
+  // ✅ New props for permissions
+  isCaregiver?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  canManageReminders?: boolean;
 }
 
 export const MedicationsTab: React.FC<MedicationsTabProps> = ({
@@ -38,6 +43,10 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
   onAddReminder,
   onEditMedication,
   onDeleteMedication,
+  isCaregiver = false,
+  canEdit = true,
+  canDelete = true,
+  canManageReminders = true,
 }) => {
   const filteredMedications = medications.filter(
     (med) =>
@@ -73,13 +82,38 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
               </View>
             </View>
             <View style={styles.actionButtons}>
-              <TouchableOpacity onPress={() => onEditMedication(medication)}>
-                <Ionicons name="pencil" size={20} color={Colors.primary} />
+              {/* ✅ Edit Button - disabled for caregivers without permission */}
+              <TouchableOpacity
+                onPress={() => onEditMedication(medication)}
+                disabled={isCaregiver && !canEdit}
+                style={isCaregiver && !canEdit && styles.disabledButton}
+              >
+                <Ionicons
+                  name="pencil"
+                  size={20}
+                  color={
+                    isCaregiver && !canEdit
+                      ? Colors.textTertiary
+                      : Colors.primary
+                  }
+                />
               </TouchableOpacity>
+
+              {/* ✅ Delete Button - disabled for caregivers without permission */}
               <TouchableOpacity
                 onPress={() => onDeleteMedication(medication.id)}
+                disabled={isCaregiver && !canDelete}
+                style={isCaregiver && !canDelete && styles.disabledButton}
               >
-                <Ionicons name="trash" size={20} color={Colors.error} />
+                <Ionicons
+                  name="trash"
+                  size={20}
+                  color={
+                    isCaregiver && !canDelete
+                      ? Colors.textTertiary
+                      : Colors.error
+                  }
+                />
               </TouchableOpacity>
             </View>
           </View>
@@ -114,16 +148,36 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
             )}
           </View>
 
+          {/* ✅ Add Reminder Button - disabled for caregivers without permission */}
           <TouchableOpacity
-            style={styles.quickAddReminder}
+            style={[
+              styles.quickAddReminder,
+              isCaregiver &&
+                !canManageReminders &&
+                styles.disabledReminderButton,
+            ]}
             onPress={onAddReminder}
+            disabled={isCaregiver && !canManageReminders}
           >
             <Ionicons
               name="add-circle-outline"
               size={20}
-              color={Colors.primary}
+              color={
+                isCaregiver && !canManageReminders
+                  ? Colors.textTertiary
+                  : Colors.primary
+              }
             />
-            <Text style={styles.quickAddReminderText}>Add Reminder</Text>
+            <Text
+              style={[
+                styles.quickAddReminderText,
+                isCaregiver &&
+                  !canManageReminders &&
+                  styles.disabledReminderText,
+              ]}
+            >
+              Add Reminder {isCaregiver && !canManageReminders && ""}
+            </Text>
           </TouchableOpacity>
         </View>
       ))}
@@ -214,4 +268,14 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
   },
   emptyStateText: { fontSize: 16, color: Colors.textTertiary, marginTop: 16 },
+  // ✅ New styles for disabled buttons
+  disabledButton: {
+    opacity: 0.5,
+  },
+  disabledReminderButton: {
+    opacity: 0.5,
+  },
+  disabledReminderText: {
+    color: Colors.textTertiary,
+  },
 });

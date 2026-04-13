@@ -30,6 +30,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
+import { useOnboarding } from "../../contexts/OnboardingContext";
+import { useSelectedPatient } from "../../contexts/SelectedPatientContext";
+import { useAuth } from "../../hooks/useAuth";
+import { useCaregiverPermissions } from "../../hooks/useCaregiverPermissions";
 import { auth, db } from "../../lib/firebase";
 import { generateReactionsAnalysis } from "../../lib/openaiService";
 import {
@@ -40,7 +44,6 @@ import {
 import { MedicationsTab } from "./MedicationsTab";
 import { ReactionsTab } from "./ReactionsTab";
 import { RemindersTab } from "./RemindersTab";
-
 // Types
 interface Medication {
   id: string;
@@ -129,6 +132,11 @@ const normalizeDate = (date: Date): Date => {
 
 export default function MedicationsScreen() {
   const [medications, setMedications] = useState<Medication[]>([]);
+  const { user } = useAuth();
+  const { data } = useOnboarding();
+  const { selectedPatientId, setSelectedPatientId, userType } =
+    useSelectedPatient();
+  const isCaregiver = userType === "caregiver";
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [symptomLogs, setSymptomLogs] = useState<SymptomLog[]>([]);
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
@@ -138,6 +146,31 @@ export default function MedicationsScreen() {
   >("medications");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // For caregivers - they need to select a patient
+  const patientId = userType === "patient" ? user?.uid : selectedPatientId;
+  const caregiverId = user?.uid;
+
+  // ✅ REPLACE WITH THIS (unconditional call)
+  const { can, loading: permissionsLoading } = useCaregiverPermissions({
+    patientId: userType === "caregiver" ? patientId || "" : "",
+    caregiverId: userType === "caregiver" ? caregiverId || "" : "",
+  });
+
+  // Then create safeCan based on user type
+  const safeCan = {
+    addMedications: () =>
+      userType === "caregiver" ? (can?.addMedications() ?? false) : true,
+    editMedications: () =>
+      userType === "caregiver" ? (can?.editMedications() ?? false) : true,
+    deleteMedications: () =>
+      userType === "caregiver" ? (can?.deleteMedications() ?? false) : true,
+    manageReminders: () =>
+      userType === "caregiver" ? (can?.manageReminders() ?? false) : true,
+    markAsTaken: () =>
+      userType === "caregiver" ? (can?.markAsTaken() ?? false) : true,
+    manageHealth: () =>
+      userType === "caregiver" ? (can?.manageHealth() ?? false) : true,
+  };
   // AI Analysis state
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
   const [loadingReactions, setLoadingReactions] = useState(false);
@@ -265,9 +298,9 @@ export default function MedicationsScreen() {
           const reminderDateTime = new Date(createdDate);
           reminderDateTime.setHours(hours, minutes, 0, 0);
 
-          // If the time has passed on creation day, it schedules for the next day
-          const now = new Date();
-          if (reminderDateTime <= now) {
+          const alarmAlreadyPassedOnCreationDay =
+            reminderDateTime <= createdDate;
+          if (alarmAlreadyPassedOnCreationDay) {
             reminderDateTime.setDate(reminderDateTime.getDate() + 1);
           }
 
@@ -321,14 +354,19 @@ export default function MedicationsScreen() {
     return result;
   }, [reminders, takenLogs, medications]);
 
-  // Load data
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const targetUserId = userType === "patient" ? user?.uid : selectedPatientId;
+
+    if (!targetUserId) {
+      console.log("⏳ No target user ID yet");
+      return;
+    }
+
+    console.log("🔍 Loading data for user:", targetUserId);
 
     const unsubscribeMeds = onSnapshot(
       query(
-        collection(db, "users", userId, "medications"),
+        collection(db, "users", targetUserId, "medications"),
         orderBy("createdAt", "desc"),
       ),
       (snapshot) => {
@@ -340,10 +378,14 @@ export default function MedicationsScreen() {
         );
         setLoading(false);
       },
+      (error) => {
+        console.error("Error loading medications:", error);
+        setLoading(false);
+      },
     );
 
     const unsubscribeReminders = onSnapshot(
-      collection(db, "users", userId, "reminders"),
+      collection(db, "users", targetUserId, "reminders"),
       (snapshot) => {
         setReminders(
           snapshot.docs.map((doc) => ({
@@ -352,11 +394,14 @@ export default function MedicationsScreen() {
           })) as Reminder[],
         );
       },
+      (error) => {
+        console.error("Error loading reminders:", error);
+      },
     );
 
     const unsubscribeLogs = onSnapshot(
       query(
-        collection(db, "users", userId, "symptom_logs"),
+        collection(db, "users", targetUserId, "symptom_logs"),
         orderBy("logged_at", "desc"),
       ),
       (snapshot) => {
@@ -367,10 +412,13 @@ export default function MedicationsScreen() {
           })) as SymptomLog[],
         );
       },
+      (error) => {
+        console.error("Error loading symptom logs:", error);
+      },
     );
 
     const unsubscribeTaken = onSnapshot(
-      collection(db, "users", userId, "taken_logs"),
+      collection(db, "users", targetUserId, "taken_logs"),
       (snapshot) => {
         setTakenLogs(
           snapshot.docs.map((doc) => ({
@@ -378,6 +426,9 @@ export default function MedicationsScreen() {
             ...doc.data(),
           })) as TakenLog[],
         );
+      },
+      (error) => {
+        console.error("Error loading taken logs:", error);
       },
     );
 
@@ -387,7 +438,7 @@ export default function MedicationsScreen() {
       unsubscribeLogs();
       unsubscribeTaken();
     };
-  }, []);
+  }, [user?.uid, userType, selectedPatientId]);
 
   useEffect(() => {
     if (activeTab === "reactions" && !reactionsLoaded && !loadingReactions) {
@@ -410,9 +461,50 @@ export default function MedicationsScreen() {
 
     if (batch.length > 0) Promise.all(batch).catch(console.warn);
   }, [reminders]);
+  // Auto-select first patient for caregivers
+  // useEffect(() => {
+  //   if (userType !== "caregiver") return;
 
-  const loadReactions = async () => {
-    const userId = auth.currentUser?.uid;
+  //   const userId = user?.uid;
+  //   if (!userId) return;
+
+  //   let unsubscribe: (() => void) | undefined;
+
+  //   const setup = async () => {
+  //     const userDoc = await getDoc(doc(db, "users", userId));
+  //     const fetchedUserType = userDoc.data()?.userType;
+
+  //     if (fetchedUserType === "caregiver") {
+  //       const q = query(
+  //         collection(db, "caregiver_connections"),
+  //         where("caregiverId", "==", userId),
+  //         where("status", "==", "approved"),
+  //       );
+
+  //       unsubscribe = onSnapshot(q, (snapshot) => {
+  //         const patientList = snapshot.docs.map((doc) => ({
+  //           id: doc.data().patientId,
+  //           name: doc.data().patientName,
+  //         }));
+
+  //         if (patientList.length > 0 && !selectedPatientId) {
+  //           setSelectedPatientId(patientList[0].id);
+  //         }
+  //       });
+  //     }
+  //   };
+
+  //   setup();
+
+  //   return () => unsubscribe?.(); // ✅ cleanup now actually runs
+  // }, [userType, selectedPatientId]);
+
+  useEffect(() => {
+    setReactionsLoaded(false);
+  }, [medications]);
+
+  const loadReactions = useCallback(async () => {
+    const userId = user?.uid;
     if (!userId) return;
 
     setLoadingReactions(true);
@@ -430,13 +522,12 @@ export default function MedicationsScreen() {
       const analysis = await generateReactionsAnalysis(userId, todaysMeds);
       setAiAnalysis(analysis);
     } catch (error: any) {
-      console.error("Error loading reactions:", error);
       setReactionsError(error.message || "Failed to load reactions");
     } finally {
       setLoadingReactions(false);
       setReactionsLoaded(true);
     }
-  };
+  }, [user, getTodaysMedications]);
 
   // Helper functions
   const formatTime = (time: string) => {
@@ -498,7 +589,7 @@ export default function MedicationsScreen() {
       return;
     }
 
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     if (!editingMedication && medicationForm.drug_id) {
@@ -524,7 +615,7 @@ export default function MedicationsScreen() {
   };
 
   const saveMedicationToFirestore = async (data: Partial<Medication>) => {
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     try {
@@ -582,7 +673,7 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteMedication = async (id: string) => {
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     Alert.alert(
@@ -632,7 +723,7 @@ export default function MedicationsScreen() {
       return;
     }
 
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     const normalizedDays =
@@ -682,7 +773,7 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteReminder = async (id: string) => {
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     Alert.alert("Delete Reminder", "Are you sure?", [
@@ -698,7 +789,7 @@ export default function MedicationsScreen() {
   };
 
   const handleToggleReminder = async (id: string, enabled: boolean) => {
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
     await updateDoc(doc(db, "users", userId, "reminders", id), { enabled });
   };
@@ -733,7 +824,7 @@ export default function MedicationsScreen() {
       return;
     }
 
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     try {
@@ -753,7 +844,7 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteSymptomLog = async (id: string) => {
-    const userId = auth.currentUser?.uid;
+    const userId = user?.uid;
     if (!userId) return;
 
     Alert.alert("Delete Log", "Are you sure?", [
@@ -788,33 +879,53 @@ export default function MedicationsScreen() {
   }
 
   const todaysMedsForDisplay = getTodaysMedications();
-
+  console.log("🔍 DEBUG - Permissions in MedicationsScreen:", {
+    userType,
+    isCaregiver: userType === "caregiver",
+    canEdit: safeCan.editMedications(),
+    canDelete: safeCan.deleteMedications(),
+    canManageReminders: safeCan.manageReminders(),
+  });
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Medications</Text>
         <View style={styles.headerButtons}>
-          {activeTab === "reactions" && (
-            <TouchableOpacity onPress={() => setLogModalVisible(true)}>
-              <Ionicons name="add-circle" size={28} color={Colors.primary} />
+          {/* ✅ Only show Add Medication button when NOT in reactions tab */}
+          {activeTab !== "reactions" && (
+            <TouchableOpacity
+              style={[
+                styles.headerIconButton,
+                !safeCan.addMedications() && styles.disabledButton,
+              ]}
+              onPress={() => {
+                setEditingMedication(null);
+                resetMedicationForm();
+                setMedicationModalVisible(true);
+              }}
+              disabled={!safeCan.addMedications()}
+            >
+              <Ionicons name="add" size={20} color={Colors.surface} />
             </TouchableOpacity>
           )}
+
+          {/* Reminders Tab Button - only show when NOT in reactions */}
           {activeTab !== "reactions" && (
-            <>
-              <TouchableOpacity onPress={() => setReminderModalVisible(true)}>
-                <Ionicons name="alarm" size={24} color={Colors.primary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  setEditingMedication(null);
-                  resetMedicationForm();
-                  setMedicationModalVisible(true);
-                }}
-              >
-                <Ionicons name="add-circle" size={28} color={Colors.primary} />
-              </TouchableOpacity>
-            </>
+            <TouchableOpacity
+              onPress={() => setReminderModalVisible(true)}
+              disabled={isCaregiver && !safeCan.manageReminders()}
+            >
+              <Ionicons
+                name="alarm"
+                size={30}
+                color={
+                  isCaregiver && !safeCan.manageReminders()
+                    ? Colors.textTertiary
+                    : Colors.primary
+                }
+              />
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -896,6 +1007,10 @@ export default function MedicationsScreen() {
               setMedicationModalVisible(true);
             }}
             onDeleteMedication={handleDeleteMedication}
+            isCaregiver={isCaregiver}
+            canEdit={safeCan.editMedications()}
+            canDelete={safeCan.deleteMedications()}
+            canManageReminders={safeCan.manageReminders()}
           />
         )}
 
@@ -913,6 +1028,8 @@ export default function MedicationsScreen() {
             }}
             onDeleteReminder={handleDeleteReminder}
             onToggleReminder={handleToggleReminder}
+            isCaregiver={isCaregiver}
+            canManageReminders={safeCan.manageReminders()}
           />
         )}
 
@@ -1641,7 +1758,11 @@ export default function MedicationsScreen() {
         animationType="slide"
         transparent
         visible={interactionModalVisible}
-        onRequestClose={() => setInteractionModalVisible(false)}
+        onRequestClose={() => {
+          setInteractionModalVisible(false);
+          setPendingMedication(null); // ✅ clear stale pending data
+          setInteractionWarnings([]); // ✅ clear stale warnings too
+        }}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
@@ -1650,7 +1771,11 @@ export default function MedicationsScreen() {
                 ⚠️ Interaction Warning
               </Text>
               <TouchableOpacity
-                onPress={() => setInteractionModalVisible(false)}
+                onPress={() => {
+                  setInteractionModalVisible(false);
+                  setPendingMedication(null);
+                  setInteractionWarnings([]);
+                }}
               >
                 <Ionicons name="close" size={24} color={Colors.text} />
               </TouchableOpacity>
@@ -2050,5 +2175,81 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary,
     fontWeight: "500",
+  },
+  // Permission-based button styles
+  disabledButton: {
+    backgroundColor: Colors.textTertiary,
+  },
+  disabledIconButton: {
+    opacity: 0.5,
+  },
+  actionButtons: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  iconButton: {
+    padding: 8,
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  editIconButton: {
+    backgroundColor: Colors.warning + "15",
+  },
+  deleteIconButton: {
+    backgroundColor: Colors.error + "15",
+  },
+  addButton: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  addButtonText: {
+    color: Colors.surface,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  headerIconButton: {
+    width: 25,
+    height: 25,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    marginTop: 3,
+  },
+  patientSelectorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  patientSelectorLabel: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginRight: 8,
+  },
+  patientSelectorButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.background,
+    borderRadius: 8,
+  },
+  patientSelectorText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: Colors.text,
   },
 });

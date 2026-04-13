@@ -27,6 +27,9 @@ interface RemindersTabProps {
   onEditReminder: (reminder: Reminder) => void;
   onDeleteReminder: (id: string) => void;
   onToggleReminder: (id: string, enabled: boolean) => void;
+  // ✅ New props for permissions
+  isCaregiver?: boolean;
+  canManageReminders?: boolean;
 }
 
 const formatTime = (time: string) => {
@@ -52,6 +55,8 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
   onEditReminder,
   onDeleteReminder,
   onToggleReminder,
+  isCaregiver = false,
+  canManageReminders = true,
 }) => {
   const sortedReminders = [...reminders].sort((a, b) =>
     (a.times[0] ?? "").localeCompare(b.times[0] ?? ""),
@@ -80,11 +85,13 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
                 {reminder.medicationDosage}
               </Text>
             </View>
+            {/* ✅ Toggle switch - disabled for caregivers without permission */}
             <Switch
               value={reminder.enabled}
               onValueChange={() =>
                 onToggleReminder(reminder.id, !reminder.enabled)
               }
+              disabled={isCaregiver && !canManageReminders}
               trackColor={{ false: Colors.border, true: Colors.primary }}
               thumbColor={Colors.surface}
             />
@@ -130,18 +137,37 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
               </>
             )}
             <View style={{ flex: 1 }} />
-            {/* Actions */}
+            {/* ✅ Edit button - disabled for caregivers without permission */}
             <TouchableOpacity
               onPress={() => onEditReminder(reminder)}
               style={styles.actionBtn}
+              disabled={isCaregiver && !canManageReminders}
             >
-              <Ionicons name="pencil" size={16} color={Colors.primary} />
+              <Ionicons
+                name="pencil"
+                size={16}
+                color={
+                  isCaregiver && !canManageReminders
+                    ? Colors.textTertiary
+                    : Colors.primary
+                }
+              />
             </TouchableOpacity>
+            {/* ✅ Delete button - disabled for caregivers without permission */}
             <TouchableOpacity
               onPress={() => onDeleteReminder(reminder.id)}
               style={styles.actionBtn}
+              disabled={isCaregiver && !canManageReminders}
             >
-              <Ionicons name="trash" size={16} color={Colors.error} />
+              <Ionicons
+                name="trash"
+                size={16}
+                color={
+                  isCaregiver && !canManageReminders
+                    ? Colors.textTertiary
+                    : Colors.error
+                }
+              />
             </TouchableOpacity>
           </View>
         </View>

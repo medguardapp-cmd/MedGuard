@@ -1,31 +1,10 @@
 // types/caregiver.ts
 export type ConnectionStatus = "pending" | "approved" | "rejected";
-export type PermissionPreset =
-  | "view_only"
-  | "reminder_assistant"
-  | "adherence_helper"
-  | "health_assistant"
-  | "full_access";
 
 export interface CaregiverPermissions {
-  canViewMedications: boolean;
-  canAddMedications: boolean;
-  canEditMedications: boolean;
-  canDeleteMedications: boolean;
-  canMarkAsTaken: boolean;
-  canViewLogs: boolean;
-  canExportLogs: boolean;
-  canViewReminders: boolean;
-  canCreateReminders: boolean;
-  canEditReminders: boolean;
-  canDeleteReminders: boolean;
-  canViewHealthRecords: boolean;
-  canEditHealthRecords: boolean;
-  canViewNotes: boolean;
-  canAddNotes: boolean;
-  canReceiveAlerts: boolean;
-  canReceiveReports: boolean;
-  canViewEmergencyInfo: boolean;
+  canManageReminders: boolean; // Create/edit/delete reminders
+  canMarkAsTaken: boolean; // Mark medications as taken
+  canManageHealth: boolean; // View/edit health records & notes
 }
 
 export interface CaregiverConnection {
@@ -37,8 +16,7 @@ export interface CaregiverConnection {
   caregiverEmail: string;
   patientEmail: string;
   status: ConnectionStatus;
-  permissionPreset: PermissionPreset;
-  customPermissions?: CaregiverPermissions;
+  permissions: CaregiverPermissions; // Store individual toggles
   connectedAt: any;
   approvedAt?: any;
   rejectedAt?: any;
@@ -46,145 +24,24 @@ export interface CaregiverConnection {
   notes?: string;
 }
 
-// Permission Presets
-export const PERMISSION_PRESETS: Record<
-  PermissionPreset,
-  CaregiverPermissions
-> = {
-  view_only: {
-    canViewMedications: true,
-    canAddMedications: false,
-    canEditMedications: false,
-    canDeleteMedications: false,
-    canMarkAsTaken: false,
-    canViewLogs: true,
-    canExportLogs: false,
-    canViewReminders: true,
-    canCreateReminders: false,
-    canEditReminders: false,
-    canDeleteReminders: false,
-    canViewHealthRecords: true,
-    canEditHealthRecords: false,
-    canViewNotes: true,
-    canAddNotes: false,
-    canReceiveAlerts: false,
-    canReceiveReports: false,
-    canViewEmergencyInfo: true,
-  },
-  reminder_assistant: {
-    canViewMedications: true,
-    canAddMedications: false,
-    canEditMedications: false,
-    canDeleteMedications: false,
-    canMarkAsTaken: false,
-    canViewLogs: true,
-    canExportLogs: false,
-    canViewReminders: true,
-    canCreateReminders: true,
-    canEditReminders: true,
-    canDeleteReminders: true,
-    canViewHealthRecords: false,
-    canEditHealthRecords: false,
-    canViewNotes: false,
-    canAddNotes: false,
-    canReceiveAlerts: true,
-    canReceiveReports: false,
-    canViewEmergencyInfo: false,
-  },
-  adherence_helper: {
-    canViewMedications: true,
-    canAddMedications: false,
-    canEditMedications: false,
-    canDeleteMedications: false,
-    canMarkAsTaken: true,
-    canViewLogs: true,
-    canExportLogs: true,
-    canViewReminders: true,
-    canCreateReminders: false,
-    canEditReminders: false,
-    canDeleteReminders: false,
-    canViewHealthRecords: false,
-    canEditHealthRecords: false,
-    canViewNotes: false,
-    canAddNotes: false,
-    canReceiveAlerts: true,
-    canReceiveReports: true,
-    canViewEmergencyInfo: false,
-  },
-  health_assistant: {
-    canViewMedications: true,
-    canAddMedications: false,
-    canEditMedications: false,
-    canDeleteMedications: false,
-    canMarkAsTaken: false,
-    canViewLogs: true,
-    canExportLogs: false,
-    canViewReminders: false,
-    canCreateReminders: false,
-    canEditReminders: false,
-    canDeleteReminders: false,
-    canViewHealthRecords: true,
-    canEditHealthRecords: true,
-    canViewNotes: true,
-    canAddNotes: true,
-    canReceiveAlerts: false,
-    canReceiveReports: false,
-    canViewEmergencyInfo: true,
-  },
-  full_access: {
-    canViewMedications: true,
-    canAddMedications: true,
-    canEditMedications: true,
-    canDeleteMedications: true,
-    canMarkAsTaken: true,
-    canViewLogs: true,
-    canExportLogs: true,
-    canViewReminders: true,
-    canCreateReminders: true,
-    canEditReminders: true,
-    canDeleteReminders: true,
-    canViewHealthRecords: true,
-    canEditHealthRecords: true,
-    canViewNotes: true,
-    canAddNotes: true,
-    canReceiveAlerts: true,
-    canReceiveReports: true,
-    canViewEmergencyInfo: true,
-  },
+// Helper to get permission label for display
+export const getPermissionLabel = (
+  permissions: CaregiverPermissions,
+): string => {
+  const labels = [];
+  if (permissions.canManageReminders) labels.push("Reminders");
+  if (permissions.canMarkAsTaken) labels.push("Adherence");
+  if (permissions.canManageHealth) labels.push("Health");
+
+  if (labels.length === 0) return "View Only";
+  if (labels.length === 3) return "Full Access";
+  return labels.join(" + ");
 };
 
-export const getPresetInfo = (preset: PermissionPreset) => {
-  const presets = {
-    view_only: {
-      name: "View Only",
-      icon: "👁️",
-      description: "Can see medications and logs, cannot make changes",
-      color: "#64748b",
-    },
-    reminder_assistant: {
-      name: "Reminder Assistant",
-      icon: "⏰",
-      description: "Can create and manage reminders",
-      color: "#3b82f6",
-    },
-    adherence_helper: {
-      name: "Adherence Helper",
-      icon: "✅",
-      description: "Can mark medications as taken, track adherence",
-      color: "#10b981",
-    },
-    health_assistant: {
-      name: "Health Assistant",
-      icon: "📋",
-      description: "Can manage health records and add notes",
-      color: "#8b5cf6",
-    },
-    full_access: {
-      name: "Full Access",
-      icon: "🔓",
-      description: "Complete control over all features",
-      color: "#ef4444",
-    },
-  };
-  return presets[preset];
+// Check if permissions allow a specific action
+export const hasPermission = (
+  permissions: CaregiverPermissions | undefined,
+  action: keyof CaregiverPermissions,
+): boolean => {
+  return permissions?.[action] ?? false;
 };
