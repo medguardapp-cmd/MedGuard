@@ -6,13 +6,13 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -32,11 +32,6 @@ import Colors from "../../constants/colors";
 import { useSelectedPatient } from "../../contexts/SelectedPatientContext";
 import { useCaregiverPermissions } from "../../hooks/useCaregiverPermissions";
 import { auth, db } from "../../lib/firebase";
-import {
-  backfillTodaySnapshot,
-  SnapshotItem,
-  snapshotKey,
-} from "../../lib/scheduleSnapshot";
 import {
   checkAllInteractions,
   MedicineSearchResult,
@@ -73,7 +68,7 @@ interface Reminder {
   durationType?: "none" | "date-range" | "until-empty";
   startDate?: string | null;
   endDate?: string | null;
-  createdAt?: any; // When the reminder was created
+  createdAt?: any;
 }
 
 interface ScheduleItem {
@@ -109,41 +104,58 @@ interface TakenLog {
   dateKey: string;
 }
 
+interface MissedLog {
+  id: string;
+  medicationId: string;
+  reminderId: string;
+  name: string;
+  dosage: string;
+  scheduledTime: string;
+  dateKey: string;
+  missedAt: any;
+}
+
 // ─────────────────────────────────────────────
-// Helpers - FIXED scheduling logic for one-time reminders
+// Helpers
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/**
- * Normalize date to midnight for consistent comparison
- */
 const normalizeDate = (date: Date): Date => {
   const normalized = new Date(date);
   normalized.setHours(0, 0, 0, 0);
   return normalized;
 };
 
+function dateKey(date: Date): string {
+  return date.toDateString();
+}
+
+/**
+ * Returns a stable YYYY-MM-DD string used as a Firestore doc ID
+ * for the "end-of-day missed" write — avoids duplicates across timezones.
+ */
+function isoDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 const getOneTimeReminderDate = (reminder: Reminder): Date => {
-  // Get creation date
   const createdDate = reminder.createdAt?.toDate
     ? reminder.createdAt.toDate()
     : new Date();
 
-  // Get the first time from times array
   let timeString = "08:00";
   if (reminder.times && reminder.times.length > 0) {
     timeString = reminder.times[0];
   }
 
   const [hours, minutes] = timeString.split(":").map(Number);
-
-  // Start with the creation date
   const reminderTime = new Date(createdDate);
   reminderTime.setHours(hours, minutes, 0, 0);
 
   const now = new Date();
-
-  // Keep adding days until the reminder time is in the future
   while (reminderTime <= now) {
     reminderTime.setDate(reminderTime.getDate() + 1);
   }
@@ -160,7 +172,6 @@ const isReminderActiveOnDate = (
 
   const normalizedDate = normalizeDate(date);
 
-  // ── createdAt guard: never show before reminder was created ──
   if (reminder.createdAt) {
     const createdDate = normalizeDate(
       reminder.createdAt?.toDate
@@ -170,17 +181,14 @@ const isReminderActiveOnDate = (
     if (normalizedDate < createdDate) return false;
   }
 
-  // ── One-time reminder (no days selected) ──
   if (!reminder.days || reminder.days.length === 0) {
     const scheduledDate = getOneTimeReminderDate(reminder);
     return normalizedDate.getTime() === scheduledDate.getTime();
   }
 
-  // ── Day-of-week check ──
   const dayName = DAY_NAMES[normalizedDate.getDay()];
   if (!reminder.days.includes(dayName)) return false;
 
-  // ── Date-range duration ──
   if (reminder.durationType === "date-range") {
     if (reminder.startDate) {
       const startDate = normalizeDate(new Date(reminder.startDate));
@@ -192,7 +200,6 @@ const isReminderActiveOnDate = (
     }
   }
 
-  // ── Until-empty duration ──
   if (reminder.durationType === "until-empty") {
     if (!medication || medication.quantity === undefined) return false;
     if (medication.quantity <= 0) return false;
@@ -201,9 +208,6 @@ const isReminderActiveOnDate = (
   return true;
 };
 
-/**
- * Get reminders for a specific date - FIXED
- */
 const getRemindersForDate = (
   date: Date,
   allReminders: Reminder[],
@@ -255,8 +259,72 @@ function getTakenVariance(
   return "on-time";
 }
 
-function dateKey(date: Date): string {
-  return date.toDateString();
+// ─────────────────────────────────────────────
+// Save missed logs for a past date
+// ─────────────────────────────────────────────
+/**
+ * At end of day (or when loading past dates), find all reminder slots
+ * that were NOT taken and write them as missed_logs.
+ * Uses a sentinel doc "missed_written/{isoDate}" to avoid duplicates.
+ */
+async function saveMissedLogsForDate(
+  userId: string,
+  date: Date,
+  reminders: Reminder[],
+  medications: Medication[],
+  takenLogs: TakenLog[],
+): Promise<void> {
+  const normalizedDate = normalizeDate(date);
+  const dk = dateKey(normalizedDate);
+  const iso = isoDateKey(normalizedDate);
+
+  // Guard: only write for dates strictly in the past
+  const today = normalizeDate(new Date());
+  if (normalizedDate >= today) return;
+
+  // Check if we already wrote missed logs for this date
+  const sentinelRef = doc(db, "users", userId, "missed_written", iso);
+  const { getDoc } = await import("firebase/firestore");
+  const sentinel = await getDoc(sentinelRef);
+  if (sentinel.exists()) return; // already written
+
+  const activeReminders = getRemindersForDate(
+    normalizedDate,
+    reminders,
+    medications,
+  );
+  const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
+
+  const batch = writeBatch(db);
+
+  for (const reminder of activeReminders) {
+    for (const time of reminder.times || ["08:00"]) {
+      // A log matches if reminderId is `${r.id}_${time}` OR just `r.id`
+      const wasTaken = logsForDate.some(
+        (l) =>
+          l.reminderId === `${reminder.id}_${time}` ||
+          l.reminderId === reminder.id,
+      );
+
+      if (!wasTaken) {
+        const missedRef = doc(collection(db, "users", userId, "missed_logs"));
+        batch.set(missedRef, {
+          medicationId: reminder.medicationId,
+          reminderId: reminder.id,
+          name: reminder.medicationName,
+          dosage: reminder.medicationDosage,
+          scheduledTime: time,
+          dateKey: dk,
+          missedAt: serverTimestamp(),
+        });
+      }
+    }
+  }
+
+  // Write the sentinel so we never duplicate
+  batch.set(sentinelRef, { writtenAt: serverTimestamp(), dateKey: dk });
+
+  await batch.commit();
 }
 
 // ─────────────────────────────────────────────
@@ -270,9 +338,7 @@ export default function HomeScreen() {
   const [medications, setMedications] = useState<Medication[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
-  const [snapshots, setSnapshots] = useState<Record<string, SnapshotItem[]>>(
-    {},
-  );
+  const [missedLogs, setMissedLogs] = useState<MissedLog[]>([]);
   const [interactions, setInteractions] = useState<InteractionInfo[]>([]);
   const [loadingInteractions, setLoadingInteractions] = useState(false);
   const [interactionsLoaded, setInteractionsLoaded] = useState(false);
@@ -286,8 +352,6 @@ export default function HomeScreen() {
     dosage: "",
     time: "",
   });
-
-  // Quick Take search state
   const [quickTakeSearch, setQuickTakeSearch] = useState<
     MedicineSearchResult[]
   >([]);
@@ -296,13 +360,11 @@ export default function HomeScreen() {
     useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
-  const backfillDone = useRef(false);
-  const cleanupDone = useRef(false);
+  const missedWrittenDates = useRef<Set<string>>(new Set());
   const today = normalizeDate(new Date());
   const isTodaySelected =
     normalizeDate(selectedDate).getTime() === today.getTime();
 
-  // ✅ ADD THESE MISSING STATE DECLARATIONS:
   const { selectedPatientId, setSelectedPatientId, userType } =
     useSelectedPatient();
   const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
@@ -322,13 +384,11 @@ export default function HomeScreen() {
   };
   const days = generateDays();
 
-  // Add permission check for caregivers
   const { can, loading: permissionsLoading } = useCaregiverPermissions({
     patientId: userType === "caregiver" ? selectedPatientId || "" : "",
     caregiverId: userType === "caregiver" ? auth.currentUser?.uid || "" : "",
   });
 
-  // Create safeCan based on user type
   const safeCan = {
     markAsTaken: () =>
       userType === "caregiver" ? (can?.markAsTaken() ?? false) : true,
@@ -340,14 +400,11 @@ export default function HomeScreen() {
   }, []);
 
   // ─── Firebase listeners ───────────────────────
-  // ─── Firebase listeners ───────────────────────
   useEffect(() => {
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
 
     if (!targetUserId) return;
-
-    console.log("📋 Loading data for user:", targetUserId);
 
     const unsubMeds = onSnapshot(
       query(
@@ -380,51 +437,76 @@ export default function HomeScreen() {
       },
     );
 
-    const loadSnapshots = async () => {
-      const cache: Record<string, SnapshotItem[]> = {};
-      await Promise.all(
-        Array.from({ length: 15 }, (_, i) => {
-          const d = new Date(today);
-          d.setDate(today.getDate() - (i + 1));
-          const sk = snapshotKey(d);
-          return getDoc(
-            doc(db, "users", targetUserId, "schedule_snapshots", sk),
-          ).then((snap) => {
-            if (snap.exists()) cache[sk] = snap.data()?.items ?? [];
-          });
-        }),
-      );
-      setSnapshots(cache);
-    };
-    loadSnapshots();
+    const unsubMissed = onSnapshot(
+      collection(db, "users", targetUserId, "missed_logs"),
+      (snap) => {
+        setMissedLogs(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() })) as MissedLog[],
+        );
+      },
+    );
 
     return () => {
       unsubMeds();
       unsubReminders();
       unsubTaken();
+      unsubMissed();
     };
   }, [selectedPatientId, userType]);
 
-  // ─── Backfill snapshots for today + past 14 days ──────────────
-  // In index.tsx, update the backfill useEffect
+  // ─── Write missed logs when a past date is selected ──────────
   useEffect(() => {
-    if (backfillDone.current || reminders.length === 0) return;
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
     if (!targetUserId) return;
-    backfillDone.current = true;
 
-    // ONLY backfill today, not past dates
-    backfillTodaySnapshot(targetUserId, reminders, new Date()).catch(
-      console.warn,
-    );
+    const normalizedDate = normalizeDate(selectedDate);
+    const iso = isoDateKey(normalizedDate);
 
-    // ✅ REMOVE THIS ENTIRE BLOCK
-    // if (!cleanupDone.current) {
-    //   cleanupPastSnapshots(targetUserId).catch(console.warn);
-    //   cleanupDone.current = true;
-    // }
-  }, [reminders, userType, selectedPatientId]); // Also add missing dependencies
+    // Only trigger for past dates and only once per date per session
+    if (normalizedDate >= today) return;
+    if (missedWrittenDates.current.has(iso)) return;
+    if (reminders.length === 0) return;
+
+    missedWrittenDates.current.add(iso);
+
+    saveMissedLogsForDate(
+      targetUserId,
+      normalizedDate,
+      reminders,
+      medications,
+      takenLogs,
+    ).catch(console.warn);
+  }, [
+    selectedDate,
+    reminders,
+    medications,
+    takenLogs,
+    selectedPatientId,
+    userType,
+  ]);
+
+  // ─── Also write missed logs for yesterday at startup ─────────
+  useEffect(() => {
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+    if (!targetUserId || reminders.length === 0) return;
+
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const iso = isoDateKey(yesterday);
+
+    if (missedWrittenDates.current.has(iso)) return;
+    missedWrittenDates.current.add(iso);
+
+    saveMissedLogsForDate(
+      targetUserId,
+      yesterday,
+      reminders,
+      medications,
+      takenLogs,
+    ).catch(console.warn);
+  }, [reminders, medications, takenLogs, selectedPatientId, userType]);
 
   // ─── Load interactions ────────────────────────
   useEffect(() => {
@@ -462,7 +544,7 @@ export default function HomeScreen() {
     setInteractionsLoaded(true);
   };
 
-  // ─── Build schedule - FIXED ───────────────────
+  // ─── Build schedule ───────────────────────────
   useEffect(() => {
     buildSchedule(selectedDate);
   }, [
@@ -471,10 +553,10 @@ export default function HomeScreen() {
     medications,
     interactions,
     takenLogs,
-    snapshots,
+    missedLogs,
   ]);
-  // Add after the other useEffects (around line 250)
-  // Load patients for caregivers
+
+  // ─── Load patients for caregivers ─────────────
   useEffect(() => {
     const userId = auth.currentUser?.uid;
     if (!userId || userType !== "caregiver") return;
@@ -492,7 +574,6 @@ export default function HomeScreen() {
       }));
       setPatients(patientList);
 
-      // Auto-select first patient if none selected
       if (patientList.length > 0 && !selectedPatientId) {
         setSelectedPatientId(patientList[0].id);
       }
@@ -504,7 +585,6 @@ export default function HomeScreen() {
   const buildSchedule = (date: Date) => {
     const normalizedDate = normalizeDate(date);
     const dk = dateKey(normalizedDate);
-    const sk = snapshotKey(normalizedDate);
     const isPastDay = normalizedDate < today;
     const isTodayDay = normalizedDate.getTime() === today.getTime();
     const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
@@ -512,87 +592,46 @@ export default function HomeScreen() {
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     if (isPastDay) {
-      const snapshotItems = snapshots[sk] ?? [];
-      console.log(
-        `Past date ${dk}: ${snapshotItems.length} snapshot items, ${logsForDate.length} taken logs`,
+      // For past days: build from reminders + cross-reference taken_logs and missed_logs
+      const pastReminders = getRemindersForDate(
+        normalizedDate,
+        reminders,
+        medications,
       );
+      const missedForDate = missedLogs.filter((l) => l.dateKey === dk);
 
-      if (snapshotItems.length === 0) {
-        // No snapshot exists - calculate from current reminders
-        console.log(
-          "📸 No snapshot found, calculating from reminders for:",
-          normalizedDate,
-        );
+      const scheduledItems: ScheduleItem[] = pastReminders.flatMap((r) => {
+        return (r.times || ["08:00"]).map((time) => {
+          const takenLog = logsForDate.find(
+            (l) => l.reminderId === `${r.id}_${time}` || l.reminderId === r.id,
+          );
+          const wasMissed =
+            !takenLog &&
+            missedForDate.some(
+              (m) => m.reminderId === r.id && m.scheduledTime === time,
+            );
 
-        const pastReminders = getRemindersForDate(
-          normalizedDate,
-          reminders,
-          medications,
-        );
-        const calculatedItems: ScheduleItem[] = pastReminders.flatMap((r) => {
-          return (r.times || ["08:00"]).map((time) => {
-            const takenLog = logsForDate.find((l) => l.reminderId === r.id);
-            return {
-              reminderId: r.id,
-              medicationId: r.medicationId,
-              name: r.medicationName,
-              dosage: r.medicationDosage,
-              time: time,
-              taken: !!takenLog,
-              missed: !takenLog, // ✅ Mark as missed if not taken
-              late: false,
-              takenLogId: takenLog?.id,
-              takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
-              hasInteraction: false,
-              interactionSeverity: null,
-              interactionCount: 0,
-            };
-          });
-        });
-        const quickTakes: ScheduleItem[] = logsForDate
-          .filter((l) => l.reminderId === "quick-take")
-          .map((l) => ({
-            reminderId: l.id,
-            medicationId: l.medicationId,
-            name: l.name,
-            dosage: l.dosage,
-            time: l.takenAt?.toDate
-              ? l.takenAt.toDate().toTimeString().slice(0, 5)
-              : "00:00",
-            taken: true,
-            missed: false,
+          return {
+            reminderId: r.id,
+            medicationId: r.medicationId,
+            name: r.medicationName,
+            dosage: r.medicationDosage,
+            time,
+            taken: !!takenLog,
+            // Mark as missed only if we've already written the missed log
+            // (avoids showing "missed" before end-of-day write)
+            missed: wasMissed,
             late: false,
-            takenLogId: l.id,
-            takenVariance: null,
+            takenLogId: takenLog?.id,
+            takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
             hasInteraction: false,
             interactionSeverity: null,
             interactionCount: 0,
-          }));
-
-        const all = [...calculatedItems, ...quickTakes];
-        all.sort((a, b) => a.time.localeCompare(b.time));
-        setSchedule(all);
-        return;
-      }
-      const scheduledItems: ScheduleItem[] = snapshotItems.map((s) => {
-        const takenLog = logsForDate.find((l) => l.reminderId === s.reminderId);
-        return {
-          reminderId: s.reminderId,
-          medicationId: s.medicationId,
-          name: s.name,
-          dosage: s.dosage,
-          time: s.time,
-          taken: !!takenLog,
-          missed: !takenLog, // ✅ Mark as missed if not taken
-          late: false,
-          takenLogId: takenLog?.id,
-          takenVariance: takenLog ? getTakenVariance(s.time, takenLog) : null,
-          hasInteraction: false,
-          interactionSeverity: null,
-          interactionCount: 0,
-        };
+          };
+        });
       });
 
+      // Include quick-takes from taken_logs
       const quickTakes: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId === "quick-take")
         .map((l) => ({
@@ -619,6 +658,7 @@ export default function HomeScreen() {
       return;
     }
 
+    // Today / future: calculate from reminders
     const dayReminders = getRemindersForDate(
       normalizedDate,
       reminders,
@@ -655,7 +695,7 @@ export default function HomeScreen() {
           medicationId: r.medicationId,
           name: r.medicationName,
           dosage: r.medicationDosage,
-          time: time,
+          time,
           taken: !!takenLog,
           missed: false,
           late: isLate,
@@ -715,18 +755,14 @@ export default function HomeScreen() {
         dateKey: dateKey(selectedDate),
       });
 
-      // Check if this reminder has any remaining times for today
       const reminder = reminders.find((r) => r.id === item.reminderId);
       if (reminder && (!reminder.days || reminder.days.length === 0)) {
-        // For one-time reminders, check if all times are taken
         const timesForToday = reminder.times || [];
         const takenLogsForReminder = takenLogs.filter(
           (log) =>
             log.reminderId === item.reminderId &&
             log.dateKey === dateKey(selectedDate),
         );
-
-        // Only disable if all times have been taken
         if (takenLogsForReminder.length + 1 >= timesForToday.length) {
           await updateDoc(
             doc(db, "users", userId, "reminders", item.reminderId),
@@ -828,13 +864,11 @@ export default function HomeScreen() {
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
-  const refreshDataForPatient = useCallback(async (patientId: string) => {
-    const userId = patientId;
-
+  const refreshDataForPatient = useCallback(async (_patientId: string) => {
     setInteractionsLoaded(false);
   }, []);
 
-  // ─── Calendar helpers - FIXED ─────────────────────────
+  // ─── Calendar helpers ─────────────────────────
   const isToday = (d: Date) => normalizeDate(d).getTime() === today.getTime();
   const isSelected = (d: Date) =>
     normalizeDate(d).getTime() === normalizeDate(selectedDate).getTime();
@@ -860,25 +894,21 @@ export default function HomeScreen() {
     const normalizedDate = normalizeDate(date);
 
     if (isPast(normalizedDate)) {
-      const sk = snapshotKey(normalizedDate);
-      const snapshotItems = snapshots[sk] ?? [];
-      if (snapshotItems.length === 0) return "none";
       const dk = dateKey(normalizedDate);
       const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
-      const anyMissed = snapshotItems.some(
-        (s) => !logsForDate.find((l) => l.reminderId === s.reminderId),
-      );
-      return anyMissed ? "red" : "green";
+      const missedForDate = missedLogs.filter((l) => l.dateKey === dk);
+
+      if (logsForDate.length === 0 && missedForDate.length === 0) return "none";
+      if (missedForDate.length > 0) return "red";
+      return "green";
     }
 
-    // FIX: Use the same logic for future dates
     const remindersForDate = getRemindersForDate(
       normalizedDate,
       reminders,
       medications,
     );
-    const hasScheduled = remindersForDate.length > 0;
-    return hasScheduled ? "grey" : "none";
+    return remindersForDate.length > 0 ? "grey" : "none";
   };
 
   const dotColorValue = (status: ReturnType<typeof getDotStatus>) => {
@@ -955,7 +985,6 @@ export default function HomeScreen() {
                     onPress={() => {
                       setSelectedPatientId(patient.id);
                       setShowPatientSelector(false);
-                      // Refresh data with new patient
                       refreshDataForPatient(patient.id);
                     }}
                   >
@@ -975,6 +1004,7 @@ export default function HomeScreen() {
             )}
           </View>
         )}
+
         {/* Date Header */}
         <View style={styles.header}>
           <View style={styles.headerTopRow}>
@@ -1274,10 +1304,10 @@ export default function HomeScreen() {
                       style={[
                         styles.takeButton,
                         item.taken && styles.takenButton,
-                        !safeCan.markAsTaken() && styles.disabledButton, // Add disabled style
+                        !safeCan.markAsTaken() && styles.disabledButton,
                       ]}
                       onPress={() => toggleTaken(item)}
-                      disabled={!safeCan.markAsTaken()} // Disable if no permission
+                      disabled={!safeCan.markAsTaken()}
                     >
                       <Text
                         style={[
@@ -1341,6 +1371,7 @@ export default function HomeScreen() {
               )}
             </View>
           )}
+
           {/* As Needed (Quick Take) Logs */}
           {isTodaySelected &&
             takenLogs.filter(
@@ -1394,6 +1425,7 @@ export default function HomeScreen() {
                 </View>
               </>
             )}
+
           {/* Quick Actions */}
           <Text style={styles.sectionTitle}>Quick Actions</Text>
           <View style={styles.actionsContainer}>
@@ -1550,7 +1582,7 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-      {/* ── Quick Take Modal ── */}
+      {/* Quick Take Modal */}
       <Modal
         animationType="slide"
         transparent
@@ -1566,7 +1598,6 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Medication name with search */}
             <View style={styles.formGroup}>
               <Text style={styles.label}>Medication</Text>
               <TextInput
@@ -1576,8 +1607,6 @@ export default function HomeScreen() {
                 placeholder="Search brand or generic name..."
                 placeholderTextColor={Colors.textTertiary}
               />
-
-              {/* Search suggestions */}
               {quickTakeShowSuggestions && (
                 <View style={[styles.suggestionsContainer, { maxHeight: 200 }]}>
                   {quickTakeSearching ? (
@@ -1689,7 +1718,6 @@ export default function HomeScreen() {
     </SafeAreaView>
   );
 }
-
 // Styles
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
