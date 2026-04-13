@@ -1,15 +1,16 @@
-// hooks/useAuth.ts
+// hooks/useAuth.ts - COMPLETE VERSION
 import {
-    User,
-    createUserWithEmailAndPassword,
-    onAuthStateChanged,
-    sendEmailVerification,
-    sendPasswordResetEmail,
-    signInWithEmailAndPassword,
-    signOut,
+  User,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
 } from "firebase/auth";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
-import { auth } from "../lib/firebase";
+import { auth, db } from "../lib/firebase";
 
 // Logging utility
 const logAuthEvent = (event: string, data?: any) => {
@@ -72,6 +73,21 @@ export const useAuth = () => {
         emailVerified: userCredential.user.emailVerified,
       });
 
+      // ✅ CRITICAL: Create Firestore user document immediately
+      logAuthEvent("Creating Firestore user document...");
+      const userRef = doc(db, "users", userCredential.user.uid);
+      await setDoc(userRef, {
+        email: email,
+        createdAt: serverTimestamp(),
+        onboardingCompleted: false,
+        userType: "patient", // Default, will be updated during onboarding
+        emailVerified: false,
+      });
+      logAuthEvent("Firestore user document created successfully", {
+        userId: userCredential.user.uid,
+        path: `users/${userCredential.user.uid}`,
+      });
+
       // Send email verification
       logAuthEvent("Sending email verification...");
       await sendEmailVerification(userCredential.user);
@@ -89,6 +105,7 @@ export const useAuth = () => {
       };
     } catch (error: any) {
       logAuthError("Signup failed", error);
+
       return {
         success: false,
         error: error.message,

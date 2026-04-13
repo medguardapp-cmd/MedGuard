@@ -1,4 +1,5 @@
-// app/(onboarding)/stepper.tsx - UPDATED VERSION
+// app/(onboarding)/stepper.tsx - WITH CONDITIONAL STEPS FOR CAREGIVERS
+
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -30,7 +31,15 @@ export default function OnboardingStepper() {
   const [newAllergy, setNewAllergy] = useState("");
   const [newMedication, setNewMedication] = useState("");
 
-  const TOTAL_STEPS = 4;
+  // ✅ Calculate total steps based on user type
+  const getTotalSteps = () => {
+    if (data.userData.userType === "caregiver") {
+      return 3; // User Type, Personal Info, Connect (no medical info)
+    }
+    return 4; // User Type, Personal Info, Medical Info, Connect
+  };
+
+  const TOTAL_STEPS = getTotalSteps();
 
   // Helper to split name into first and last name
   const getFirstName = () => {
@@ -127,7 +136,7 @@ export default function OnboardingStepper() {
     }
   };
 
-  // Step 1: User Type
+  // Step 1: User Type (same for both)
   const renderStep1 = () => (
     <View style={styles.stepContent}>
       <Text style={styles.stepTitle}>How will you use MedGuard?</Text>
@@ -141,7 +150,11 @@ export default function OnboardingStepper() {
             styles.optionCard,
             data.userData.userType === "patient" && styles.selectedCard,
           ]}
-          onPress={() => updateUserData({ userType: "patient" })}
+          onPress={() => {
+            updateUserData({ userType: "patient" });
+            // Reset to step 0 to avoid step mismatch
+            if (currentStep > 0) setCurrentStep(0);
+          }}
         >
           <View style={styles.optionHeader}>
             <Text style={styles.optionIcon}>👤</Text>
@@ -152,33 +165,58 @@ export default function OnboardingStepper() {
           </Text>
         </TouchableOpacity>
 
-        <View style={[styles.optionCard, styles.disabledCard]}>
+        <TouchableOpacity
+          style={[
+            styles.optionCard,
+            data.userData.userType === "caregiver" && styles.selectedCard,
+          ]}
+          onPress={() => {
+            updateUserData({ userType: "caregiver" });
+            // Reset to step 0 to avoid step mismatch
+            if (currentStep > 0) setCurrentStep(0);
+          }}
+        >
           <View style={styles.optionHeader}>
             <Text style={styles.optionIcon}>🤝</Text>
             <Text style={styles.optionTitle}>Caregiver</Text>
           </View>
-          <Text style={[styles.optionDescription, styles.disabledText]}>
-            I'm caring for someone else
+          <Text style={styles.optionDescription}>
+            I'm helping someone manage their health
           </Text>
-          <View style={styles.comingSoonBadge}>
-            <Text style={styles.comingSoonText}>Coming Soon</Text>
-          </View>
-        </View>
+        </TouchableOpacity>
       </View>
 
-      <View style={styles.infoBox}>
-        <Text style={styles.infoTitle}>About Patient Mode:</Text>
-        <Text style={styles.infoText}>
-          • Track your medications and appointments
-          {"\n"}• Monitor your health metrics
-          {"\n"}• Store your medical records securely
-          {"\n"}• Get medication reminders
-        </Text>
-      </View>
+      {data.userData.userType === "patient" ? (
+        <View style={styles.infoBox}>
+          <Text style={styles.infoTitle}>About Patient Mode:</Text>
+          <Text style={styles.infoText}>
+            • Track your medications and appointments{"\n"}• Monitor your health
+            metrics{"\n"}• Store your medical records securely{"\n"}• Get
+            medication reminders{"\n"}• Share access with trusted caregivers
+          </Text>
+        </View>
+      ) : data.userData.userType === "caregiver" ? (
+        <View style={styles.infoBox}>
+          <Text style={styles.infoTitle}>About Caregiver Mode:</Text>
+          <Text style={styles.infoText}>
+            • Help manage medications for loved ones{"\n"}• Track adherence and
+            receive alerts{"\n"}• View health records (with permission){"\n"}•
+            Support multiple patients{"\n"}• Get notified of missed medications
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.infoBox}>
+          <Text style={styles.infoTitle}>Choose your role to continue</Text>
+          <Text style={styles.infoText}>
+            Select either Patient or Caregiver above to see more details about
+            each role.
+          </Text>
+        </View>
+      )}
     </View>
   );
 
-  // Step 2: Personal Info
+  // Step 2: Personal Info (same for both)
   const renderStep2 = () => {
     const genders = [
       { id: "male", label: "Male" },
@@ -326,8 +364,8 @@ export default function OnboardingStepper() {
     );
   };
 
-  // Step 3: Medical Info
-  const renderStep3 = () => {
+  // Step 3: Medical Info (ONLY for patients)
+  const renderStep3Medical = () => {
     const bloodTypes = [
       "A+",
       "A-",
@@ -494,7 +532,7 @@ export default function OnboardingStepper() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Current Medications</Text>
             <Text style={styles.sectionDescription}>
-              List medications youre currently taking
+              List medications you're currently taking
             </Text>
 
             <View style={styles.inputWithButton}>
@@ -615,108 +653,149 @@ export default function OnboardingStepper() {
     );
   };
 
-  // Step 4: Connect Caregiver (UI Only - Skip Option)
-  const renderStep4 = () => (
-    <ScrollView style={styles.stepContent} showsVerticalScrollIndicator={false}>
-      <View style={styles.centerContent}>
-        <View style={styles.caregiverIconContainer}>
-          <Text style={styles.caregiverIcon}>👨‍👩‍👧‍👦</Text>
-        </View>
+  // Step 3/4: Connect (for caregivers, this is step 3; for patients, step 4)
+  const renderConnectStep = () => {
+    const isPatient = data.userData.userType === "patient";
+    const stepNumber = isPatient ? 4 : 3;
 
-        <Text style={styles.stepTitle}>Connect with Caregiver</Text>
-        <Text style={styles.stepDescription}>
-          Optionally connect with a family member or caregiver who can help
-          manage your health
-        </Text>
+    return (
+      <ScrollView
+        style={styles.stepContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.centerContent}>
+          <View style={styles.caregiverIconContainer}>
+            <Text style={styles.caregiverIcon}>{isPatient ? "👨‍👩‍👧‍👦" : "🎉"}</Text>
+          </View>
 
-        <View style={styles.caregiverInfoCard}>
-          <Text style={styles.caregiverInfoTitle}>Caregiver Benefits:</Text>
-          <View style={styles.benefitItem}>
-            <Text style={styles.benefitIcon}>📱</Text>
-            <Text style={styles.benefitText}>
-              Medication reminders sent to both you and caregiver
-            </Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Text style={styles.benefitIcon}>🏥</Text>
-            <Text style={styles.benefitText}>
-              Caregiver can view your health records (with permission)
-            </Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Text style={styles.benefitIcon}>🔄</Text>
-            <Text style={styles.benefitText}>
-              Sync appointments and medication schedules
-            </Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Text style={styles.benefitIcon}>🆘</Text>
-            <Text style={styles.benefitText}>
-              Emergency alerts sent to caregiver
-            </Text>
-          </View>
-        </View>
-
-        <TouchableOpacity style={styles.comingSoonCard} disabled={true}>
-          <View style={styles.comingSoonHeader}>
-            <Text style={styles.comingSoonBadgeLarge}>Coming Soon</Text>
-          </View>
-          <Text style={styles.comingSoonText}>
-            Caregiver connection feature will be available in the next update.
-            You can always add a caregiver later from Settings.
+          <Text style={styles.stepTitle}>
+            {isPatient ? "Connect with Caregiver" : "You're All Set!"}
           </Text>
-        </TouchableOpacity>
 
-        <View style={styles.skipNote}>
-          <Text style={styles.skipNoteText}>
-            You can skip this step and add a caregiver later when the feature is
-            available.
+          <Text style={styles.stepDescription}>
+            {isPatient
+              ? "Optionally connect with a family member or caregiver who can help manage your health"
+              : "Your account is ready! You can now connect with patients using their unique codes."}
           </Text>
+
+          {isPatient ? (
+            <>
+              <View style={styles.caregiverInfoCard}>
+                <Text style={styles.caregiverInfoTitle}>
+                  Caregiver Benefits:
+                </Text>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>📱</Text>
+                  <Text style={styles.benefitText}>
+                    Medication reminders sent to both you and caregiver
+                  </Text>
+                </View>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>🏥</Text>
+                  <Text style={styles.benefitText}>
+                    Caregiver can view your health records (with permission)
+                  </Text>
+                </View>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>🔄</Text>
+                  <Text style={styles.benefitText}>
+                    Sync appointments and medication schedules
+                  </Text>
+                </View>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>🆘</Text>
+                  <Text style={styles.benefitText}>
+                    Emergency alerts sent to caregiver
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.skipNote}>
+                <Text style={styles.skipNoteText}>
+                  You can skip this step and add a caregiver later from the
+                  Caregiver tab.
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.caregiverInfoCard}>
+                <Text style={styles.caregiverInfoTitle}>Next Steps:</Text>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>🔑</Text>
+                  <Text style={styles.benefitText}>
+                    Ask patients for their 6-character connection code
+                  </Text>
+                </View>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>📱</Text>
+                  <Text style={styles.benefitText}>
+                    Go to the Caregiver tab to connect with patients
+                  </Text>
+                </View>
+                <View style={styles.benefitItem}>
+                  <Text style={styles.benefitIcon}>👁️</Text>
+                  <Text style={styles.benefitText}>
+                    Access patient data based on their granted permissions
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
         </View>
-      </View>
-    </ScrollView>
-  );
+      </ScrollView>
+    );
+  };
 
   const renderStepContent = () => {
+    const isPatient = data.userData.userType === "patient";
+
     switch (currentStep) {
       case 0:
         return renderStep1();
       case 1:
         return renderStep2();
       case 2:
-        return renderStep3();
+        // For patients, show medical info; for caregivers, show connect step
+        return isPatient ? renderStep3Medical() : renderConnectStep();
       case 3:
-        return renderStep4();
+        // Only patients reach step 3 (connect step)
+        return renderConnectStep();
       default:
         return null;
     }
   };
 
-  const steps = [
-    {
-      id: 1,
-      title: "User Type",
-      description: "Select how you will use MedGuard",
-    },
-    { id: 2, title: "Personal Info", description: "Tell us about yourself" },
-    {
-      id: 3,
-      title: "Medical Info",
-      description: "Share your health information",
-    },
-    {
-      id: 4,
-      title: "Caregiver",
-      description: "Connect with caregiver (optional)",
-    },
-  ];
+  // Dynamic step titles
+  const getStepTitle = () => {
+    const isPatient = data.userData.userType === "patient";
+
+    if (currentStep === 0) return "User Type";
+    if (currentStep === 1) return "Personal Info";
+    if (currentStep === 2) return isPatient ? "Medical Info" : "Complete Setup";
+    if (currentStep === 3) return "Connect Caregiver";
+    return "";
+  };
+
+  const getStepDescription = () => {
+    const isPatient = data.userData.userType === "patient";
+
+    if (currentStep === 0) return "Select how you will use MedGuard";
+    if (currentStep === 1) return "Tell us about yourself";
+    if (currentStep === 2)
+      return isPatient
+        ? "Share your health information"
+        : "Ready to start helping others";
+    if (currentStep === 3) return "Connect with caregiver (optional)";
+    return "";
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Complete Your Profile</Text>
         <Text style={styles.subtitle}>
-          Step {currentStep + 1} of {TOTAL_STEPS}: {steps[currentStep].title}
+          Step {currentStep + 1} of {TOTAL_STEPS}: {getStepTitle()}
         </Text>
 
         <View style={styles.progressContainer}>
@@ -738,7 +817,7 @@ export default function OnboardingStepper() {
           <TouchableOpacity
             style={styles.fullWidthNextButton}
             onPress={handleNext}
-            disabled={isLoading}
+            disabled={isLoading || !data.userData.userType}
           >
             <Text style={styles.nextButtonText}>
               {isLoading ? "Saving..." : "Continue"}
@@ -746,7 +825,8 @@ export default function OnboardingStepper() {
           </TouchableOpacity>
         )}
 
-        {(currentStep === 1 || currentStep === 2) && (
+        {(currentStep === 1 ||
+          (currentStep === 2 && data.userData.userType === "patient")) && (
           <>
             <TouchableOpacity
               style={styles.halfWidthBackButton}

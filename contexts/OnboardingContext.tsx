@@ -1,6 +1,12 @@
-// contexts/OnboardingContext.tsx - FIXED VERSION
+// contexts/OnboardingContext.tsx - COMPLETE FIXED VERSION
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 import React, {
   createContext,
   ReactNode,
@@ -179,25 +185,59 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
 
       setIsLoading(true);
       console.log("🚀 Completing onboarding process...");
+      console.log("User ID:", user.uid);
+      console.log("User email:", user.email);
+      console.log("Data to save:", JSON.stringify(data, null, 2));
 
-      // Try to save to Firestore first
+      // ✅ CRITICAL: Ensure user document exists
+      const userRef = doc(db, "users", user.uid);
+
+      // First, check if document exists
+      const userDoc = await getDoc(userRef);
+
+      if (!userDoc.exists()) {
+        console.log("⚠️ User document doesn't exist, creating it first...");
+        // Create the document with basic info
+        await setDoc(userRef, {
+          email: user.email,
+          createdAt: serverTimestamp(),
+          userType: data.userData.userType || "patient",
+          name: data.userData.name || "",
+          onboardingCompleted: false,
+        });
+        console.log("✅ User document created");
+      } else {
+        console.log("✅ User document exists, updating...");
+      }
+
+      // Save onboarding data to subcollection
       try {
         await saveOnboardingData(user.uid, data, true);
-        console.log("✅ Final data saved to Firestore");
-      }
-       catch (firestoreError) {
+        console.log("✅ Final onboarding data saved to Firestore");
+      } catch (firestoreError) {
         console.warn("⚠️ Firestore final save failed:", firestoreError);
-        // Show warning but continue
         Alert.alert(
           "Notice",
           "Your data was saved locally. Some features may require internet connection.",
           [{ text: "OK" }],
         );
       }
-      await setDoc(doc(db, "users", user.uid), {
+
+      // Update the user document with completion status and all data
+      await updateDoc(userRef, {
         onboardingCompleted: true,
         onboardingCompletedAt: serverTimestamp(),
-      }, { merge: true });
+        lastUpdated: serverTimestamp(),
+        name: data.userData.name,
+        userType: data.userData.userType,
+        dateOfBirth: data.userData.dateOfBirth,
+        gender: data.userData.gender,
+        contactInfo: data.userData.contactInfo,
+        medicalInfo: data.medicalData,
+      });
+
+      console.log("✅ User document updated with onboarding data");
+
       // Always set AsyncStorage - this is critical for the app to work
       await AsyncStorage.setItem(
         `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,

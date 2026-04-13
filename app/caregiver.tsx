@@ -1,4 +1,3 @@
-// app/caregiver.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
@@ -18,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   ScrollView,
   Share,
   StyleSheet,
@@ -30,32 +30,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../constants/colors";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import { auth, db } from "../lib/firebase";
-
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
-type ConnectionStatus = "pending" | "approved" | "rejected";
-
-interface CaregiverConnection {
-  id: string;
-  patientId: string;
-  caregiverId: string;
-  patientName: string;
-  caregiverName: string;
-  caregiverEmail: string;
-  patientEmail: string;
-  connectedAt: any;
-  status: ConnectionStatus;
-}
-
-interface UserData {
-  name: string;
-  email: string;
-  caregiverCode?: string;
-  caregiverCodeExpiresAt?: any;
-  caregiverCodeGeneratedAt?: any;
-  caregiverCodeGeneratedCount?: number;
-}
+import { CaregiverConnection, PermissionLevel } from "../types/caregiver";
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -91,6 +66,28 @@ function isCodeExpired(expiresAt: any): boolean {
   return expiresAt.toDate() < new Date();
 }
 
+function getPermissionLabel(permission: PermissionLevel): string {
+  switch (permission) {
+    case "full_access":
+      return "Full Access";
+    case "reminders_only":
+      return "Reminders Only";
+    default:
+      return "View Only";
+  }
+}
+
+function getPermissionDescription(permission: PermissionLevel): string {
+  switch (permission) {
+    case "full_access":
+      return "Can view all data, mark medications as taken, and manage reminders";
+    case "reminders_only":
+      return "Can receive medication reminders and view adherence only";
+    default:
+      return "Can view medication schedule and adherence history";
+  }
+}
+
 // ─────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────
@@ -116,6 +113,13 @@ export default function CaregiverScreen() {
   const [inputCode, setInputCode] = useState("");
   const [connectingCode, setConnectingCode] = useState(false);
 
+  // Permission modal state
+  const [permissionModalVisible, setPermissionModalVisible] = useState(false);
+  const [selectedConnection, setSelectedConnection] =
+    useState<CaregiverConnection | null>(null);
+  const [selectedPermissions, setSelectedPermissions] =
+    useState<PermissionLevel>("view_only");
+
   const userId = auth.currentUser?.uid;
   const userEmail = auth.currentUser?.email ?? "";
   const userName = data.userData.name ?? "Unknown";
@@ -126,7 +130,7 @@ export default function CaregiverScreen() {
     const loadCode = async () => {
       setLoadingCode(true);
       const userDoc = await getDoc(doc(db, "users", userId));
-      const userData = userDoc.data() as UserData;
+      const userData = userDoc.data() as any;
 
       if (userDoc.exists() && userData?.caregiverCode) {
         setMyCode(userData.caregiverCode);
@@ -342,6 +346,7 @@ export default function CaregiverScreen() {
         caregiverEmail: userEmail,
         connectedAt: serverTimestamp(),
         status: "pending",
+        permissions: "view_only", // Default permission
       });
       setInputCode("");
       Alert.alert(
@@ -354,15 +359,53 @@ export default function CaregiverScreen() {
     setConnectingCode(false);
   };
 
-  // ─── Patient: approve ─────────────────────────
-  const handleApprove = async (connection: CaregiverConnection) => {
-    await updateDoc(doc(db, "caregiver_connections", connection.id), {
+  // ─── Patient: approve with permissions ─────────
+  const handleApproveWithPermissions = (connection: CaregiverConnection) => {
+    setSelectedConnection(connection);
+    setSelectedPermissions(connection.permissions || "view_only");
+    setPermissionModalVisible(true);
+  };
+
+  const handleConfirmApprove = async () => {
+    if (!selectedConnection) return;
+
+    await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
       status: "approved",
+      approvedAt: serverTimestamp(),
+      permissions: selectedPermissions,
     });
+
     Alert.alert(
       "Connected",
-      `${connection.caregiverName} can now view your medication schedule.`,
+      `${selectedConnection.caregiverName} can now access your information with ${getPermissionLabel(selectedPermissions)} permissions.`,
     );
+
+    setPermissionModalVisible(false);
+    setSelectedConnection(null);
+  };
+
+  // ─── Patient: update permissions ──────────────
+  const handleUpdatePermissions = (connection: CaregiverConnection) => {
+    setSelectedConnection(connection);
+    setSelectedPermissions(connection.permissions || "view_only");
+    setPermissionModalVisible(true);
+  };
+
+  const handleConfirmUpdatePermissions = async () => {
+    if (!selectedConnection) return;
+
+    await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
+      permissions: selectedPermissions,
+      permissionsUpdatedAt: serverTimestamp(),
+    });
+
+    Alert.alert(
+      "Permissions Updated",
+      `${selectedConnection.caregiverName}'s permissions have been updated to ${getPermissionLabel(selectedPermissions)}.`,
+    );
+
+    setPermissionModalVisible(false);
+    setSelectedConnection(null);
   };
 
   // ─── Patient: reject ──────────────────────────
@@ -378,6 +421,7 @@ export default function CaregiverScreen() {
           onPress: async () => {
             await updateDoc(doc(db, "caregiver_connections", connection.id), {
               status: "rejected",
+              rejectedAt: serverTimestamp(),
             });
           },
         },
@@ -425,7 +469,97 @@ export default function CaregiverScreen() {
     );
   };
 
-  // ─── Card renderer ────────────────────────────
+  // ─── Permission Modal ─────────────────────────
+  const PermissionModal = () => (
+    <Modal
+      animationType="slide"
+      transparent
+      visible={permissionModalVisible}
+      onRequestClose={() => setPermissionModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>
+              {selectedConnection?.status === "approved"
+                ? "Update Permissions"
+                : "Set Permissions"}
+            </Text>
+            <TouchableOpacity onPress={() => setPermissionModalVisible(false)}>
+              <Ionicons name="close" size={24} color={Colors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.modalSubtitle}>
+            {selectedConnection?.status === "approved"
+              ? `Change what ${selectedConnection?.caregiverName} can access`
+              : `Choose what ${selectedConnection?.caregiverName} can access`}
+          </Text>
+
+          {(
+            ["view_only", "reminders_only", "full_access"] as PermissionLevel[]
+          ).map((level) => (
+            <TouchableOpacity
+              key={level}
+              style={[
+                styles.permissionOption,
+                selectedPermissions === level &&
+                  styles.permissionOptionSelected,
+              ]}
+              onPress={() => setSelectedPermissions(level)}
+            >
+              <View style={styles.permissionHeader}>
+                <Text
+                  style={[
+                    styles.permissionTitle,
+                    selectedPermissions === level &&
+                      styles.permissionTitleSelected,
+                  ]}
+                >
+                  {getPermissionLabel(level)}
+                </Text>
+                {selectedPermissions === level && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={22}
+                    color={Colors.primary}
+                  />
+                )}
+              </View>
+              <Text style={styles.permissionDescription}>
+                {getPermissionDescription(level)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => setPermissionModalVisible(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.saveButton]}
+              onPress={
+                selectedConnection?.status === "approved"
+                  ? handleConfirmUpdatePermissions
+                  : handleConfirmApprove
+              }
+            >
+              <Text style={styles.saveButtonText}>
+                {selectedConnection?.status === "approved"
+                  ? "Update"
+                  : "Approve"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // ─── Card renderer with permission badge ────────
   const renderCard = (
     conn: CaregiverConnection,
     variant: "approve-reject" | "disconnect" | "cancel",
@@ -450,13 +584,25 @@ export default function CaregiverScreen() {
           <Text style={styles.connectionName}>{name}</Text>
           <Text style={styles.connectionEmail}>{email}</Text>
           <Text style={styles.connectionDate}>{dateLabel}</Text>
+          {variant === "disconnect" && conn.permissions && (
+            <View style={styles.permissionBadge}>
+              <Ionicons
+                name="shield-checkmark"
+                size={12}
+                color={Colors.primary}
+              />
+              <Text style={styles.permissionBadgeText}>
+                {getPermissionLabel(conn.permissions)}
+              </Text>
+            </View>
+          )}
         </View>
 
         {variant === "approve-reject" && (
           <View style={styles.approvalButtons}>
             <TouchableOpacity
               style={styles.approveButton}
-              onPress={() => handleApprove(conn)}
+              onPress={() => handleApproveWithPermissions(conn)}
             >
               <Ionicons name="checkmark" size={14} color={Colors.surface} />
               <Text style={styles.approveButtonText}>Approve</Text>
@@ -472,16 +618,30 @@ export default function CaregiverScreen() {
         )}
 
         {variant === "disconnect" && (
-          <TouchableOpacity
-            style={styles.disconnectButton}
-            onPress={() => handleDisconnect(conn)}
-          >
-            <Ionicons
-              name="close-circle-outline"
-              size={22}
-              color={Colors.error}
-            />
-          </TouchableOpacity>
+          <View style={styles.connectionActions}>
+            {userType === "patient" && (
+              <TouchableOpacity
+                style={styles.iconButton}
+                onPress={() => handleUpdatePermissions(conn)}
+              >
+                <Ionicons
+                  name="settings-outline"
+                  size={22}
+                  color={Colors.primary}
+                />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.iconButton}
+              onPress={() => handleDisconnect(conn)}
+            >
+              <Ionicons
+                name="close-circle-outline"
+                size={22}
+                color={Colors.error}
+              />
+            </TouchableOpacity>
+          </View>
         )}
 
         {variant === "cancel" && (
@@ -729,17 +889,19 @@ export default function CaregiverScreen() {
           />
           <Text style={styles.infoText}>
             {userType === "patient"
-              ? "Caregivers can view your medication schedule and adherence history. You control who has access. Regenerating your code creates a new code for future connections - existing caregivers keep access."
-              : "Once approved, you can view the patient's medication schedule and track adherence. You'll receive updates when they take their medications."}
+              ? "Caregivers can view your medication schedule and adherence history. You control who has access and what they can see. Regenerating your code creates a new code for future connections - existing caregivers keep access."
+              : "Once approved, you can view the patient's medication schedule and track adherence based on the permissions they grant you."}
           </Text>
         </View>
 
         <View style={{ height: 32 }} />
       </ScrollView>
+
+      {/* Permission Modal */}
+      <PermissionModal />
     </SafeAreaView>
   );
 }
-
 // ─────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────
