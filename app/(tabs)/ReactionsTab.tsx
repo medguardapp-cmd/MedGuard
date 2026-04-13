@@ -1,15 +1,15 @@
 // app/(tabs)/ReactionsTab.tsx
 import { Ionicons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Modal,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Modal,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import Colors from "../../constants/colors";
 
@@ -66,6 +66,28 @@ const formatLogDate = (timestamp: any) => {
   });
 };
 
+// ✅ Helper function to deduplicate interactions
+const deduplicateInteractions = (interactions: any[]) => {
+  if (!interactions || !Array.isArray(interactions)) return [];
+
+  const seen = new Set<string>();
+  const deduped: any[] = [];
+
+  for (const interaction of interactions) {
+    // Create a unique key based on the two drug names (sorted alphabetically)
+    const drugA = interaction.drugA || "";
+    const drugB = interaction.drugB || "";
+    const key = [drugA, drugB].sort().join("|");
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(interaction);
+    }
+  }
+
+  return deduped;
+};
+
 export const ReactionsTab: React.FC<ReactionsTabProps> = ({
   aiAnalysis,
   loadingReactions,
@@ -87,6 +109,18 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
     data?: any;
     title: string;
   } | null>(null);
+
+  // ✅ Memoize deduplicated interactions
+  const dedupedInteractions = useMemo(() => {
+    return deduplicateInteractions(aiAnalysis?.interactions);
+  }, [aiAnalysis?.interactions]);
+
+  // Use deduped count for display
+  const interactionCount = dedupedInteractions.length;
+  const sideEffectCount = aiAnalysis?.sideEffects?.length || 0;
+  const communityCount = aiAnalysis?.communityReports?.length || 0;
+  const warningCount = aiAnalysis?.profileWarnings?.length || 0;
+  const hasIssues = interactionCount > 0 || warningCount > 0;
 
   if (loadingReactions) {
     return (
@@ -129,13 +163,6 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
       </View>
     );
   }
-
-  // Count warnings and issues
-  const interactionCount = aiAnalysis.interactions?.length || 0;
-  const sideEffectCount = aiAnalysis.sideEffects?.length || 0;
-  const communityCount = aiAnalysis.communityReports?.length || 0;
-  const warningCount = aiAnalysis.profileWarnings?.length || 0;
-  const hasIssues = interactionCount > 0 || warningCount > 0;
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -249,7 +276,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
                 setSelectedModal({
                   type: "interactions",
                   title: "Drug Interactions",
-                  data: aiAnalysis.interactions,
+                  data: dedupedInteractions, // ✅ Use deduped interactions
                 })
               }
             >
@@ -273,6 +300,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         </View>
       )}
 
+      {/* Rest of your component remains the same... */}
       {/* Side Effects Summary */}
       {sideEffectCount > 0 && (
         <TouchableOpacity
@@ -421,7 +449,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         )}
       </View>
 
-      {/* Detail Modal */}
+      {/* Detail Modal - Update the interactions display */}
       <Modal
         animationType="slide"
         transparent={false}
@@ -446,6 +474,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
                 <Text style={styles.modalSubtitle}>
                   Drug interactions can affect how your medications work
                 </Text>
+                {/* ✅ Display deduplicated interactions */}
                 {selectedModal.data.map((interaction: any, index: number) => (
                   <View
                     key={index}
@@ -502,6 +531,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
               </View>
             )}
 
+            {/* Rest of your modal content remains the same */}
             {selectedModal?.type === "sideEffects" && (
               <View>
                 <Text style={styles.modalSubtitle}>

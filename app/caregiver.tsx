@@ -48,6 +48,15 @@ interface CaregiverConnection {
   status: ConnectionStatus;
 }
 
+interface UserData {
+  name: string;
+  email: string;
+  caregiverCode?: string;
+  caregiverCodeExpiresAt?: any;
+  caregiverCodeGeneratedAt?: any;
+  caregiverCodeGeneratedCount?: number;
+}
+
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
@@ -60,11 +69,26 @@ function generateCode(): string {
 
 function formatDate(timestamp: any): string {
   if (!timestamp?.toDate) return "Recently";
-  return timestamp.toDate().toLocaleDateString("en-US", {
+  const date = timestamp.toDate();
+  const now = new Date();
+  const diffDays = Math.floor(
+    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+
+  return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
+}
+
+function isCodeExpired(expiresAt: any): boolean {
+  if (!expiresAt?.toDate) return false;
+  return expiresAt.toDate() < new Date();
 }
 
 // ─────────────────────────────────────────────
@@ -76,6 +100,8 @@ export default function CaregiverScreen() {
   const userType = data.userData.userType; // "patient" | "caregiver"
 
   const [myCode, setMyCode] = useState<string | null>(null);
+  const [codeExpiresAt, setCodeExpiresAt] = useState<any>(null);
+  const [codeGeneratedAt, setCodeGeneratedAt] = useState<any>(null);
   const [loadingCode, setLoadingCode] = useState(true);
 
   const [pendingRequests, setPendingRequests] = useState<CaregiverConnection[]>(
@@ -100,12 +126,40 @@ export default function CaregiverScreen() {
     const loadCode = async () => {
       setLoadingCode(true);
       const userDoc = await getDoc(doc(db, "users", userId));
-      if (userDoc.exists() && userDoc.data()?.caregiverCode) {
-        setMyCode(userDoc.data()!.caregiverCode);
+      const userData = userDoc.data() as UserData;
+
+      if (userDoc.exists() && userData?.caregiverCode) {
+        setMyCode(userData.caregiverCode);
+        setCodeExpiresAt(userData.caregiverCodeExpiresAt);
+        setCodeGeneratedAt(userData.caregiverCodeGeneratedAt);
+
+        // Check if code is expired
+        if (isCodeExpired(userData.caregiverCodeExpiresAt)) {
+          Alert.alert(
+            "Code Expired",
+            "Your caregiver code has expired. Generate a new one to continue sharing access.",
+            [
+              {
+                text: "Generate New Code",
+                onPress: () => handleRegenerateCode(),
+              },
+            ],
+          );
+        }
       } else {
+        // Generate initial code with 30-day expiration
         const newCode = generateCode();
-        await updateDoc(doc(db, "users", userId), { caregiverCode: newCode });
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 30);
+
+        await updateDoc(doc(db, "users", userId), {
+          caregiverCode: newCode,
+          caregiverCodeExpiresAt: expiresAt,
+          caregiverCodeGeneratedAt: serverTimestamp(),
+          caregiverCodeGeneratedCount: 1,
+        });
         setMyCode(newCode);
+        setCodeExpiresAt(expiresAt);
       }
       setLoadingCode(false);
     };
@@ -154,7 +208,7 @@ export default function CaregiverScreen() {
   const handleRegenerateCode = () => {
     Alert.alert(
       "Regenerate Code?",
-      "Your current caregivers will lose access. You'll need to share the new code with them again.",
+      "Your current caregivers will NOT lose access - they are already connected. However, new caregivers will need to use the new code. Old pending requests will still work.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -163,10 +217,26 @@ export default function CaregiverScreen() {
           onPress: async () => {
             if (!userId) return;
             const newCode = generateCode();
+            const expiresAt = new Date();
+            expiresAt.setDate(expiresAt.getDate() + 30);
+
+            const userDoc = await getDoc(doc(db, "users", userId));
+            const currentCount =
+              userDoc.data()?.caregiverCodeGeneratedCount || 0;
+
             await updateDoc(doc(db, "users", userId), {
               caregiverCode: newCode,
+              caregiverCodeExpiresAt: expiresAt,
+              caregiverCodeGeneratedAt: serverTimestamp(),
+              caregiverCodeGeneratedCount: currentCount + 1,
             });
             setMyCode(newCode);
+            setCodeExpiresAt(expiresAt);
+
+            Alert.alert(
+              "Code Regenerated",
+              `Your new code is ${newCode}. Share this with new caregivers. Your existing connections remain active.`,
+            );
           },
         },
       ],
@@ -175,8 +245,12 @@ export default function CaregiverScreen() {
 
   const handleShareCode = async () => {
     if (!myCode) return;
+    const expiresText = codeExpiresAt?.toDate
+      ? `\n\nThis code expires on: ${codeExpiresAt.toDate().toLocaleDateString()}`
+      : "";
+
     await Share.share({
-      message: `Use this code to connect with me on MedGuard: ${myCode}`,
+      message: `Use this code to connect with me on MedGuard: ${myCode}${expiresText}\n\nDownload MedGuard to get started.`,
     });
   };
 
@@ -204,11 +278,23 @@ export default function CaregiverScreen() {
       const patientDoc = usersSnap.docs[0];
       const patientId = patientDoc.id;
       const patientData = patientDoc.data();
+
+      // Check if code is expired
+      if (isCodeExpired(patientData.caregiverCodeExpiresAt)) {
+        Alert.alert(
+          "Code Expired",
+          "This patient's code has expired. Ask them to generate a new code.",
+        );
+        setConnectingCode(false);
+        return;
+      }
+
       if (patientId === userId) {
         Alert.alert("Invalid", "You cannot connect to yourself.");
         setConnectingCode(false);
         return;
       }
+
       const existingSnap = await getDocs(
         query(
           collection(db, "caregiver_connections"),
@@ -246,6 +332,7 @@ export default function CaregiverScreen() {
         setConnectingCode(false);
         return;
       }
+
       await addDoc(collection(db, "caregiver_connections"), {
         patientId,
         caregiverId: userId,
@@ -272,6 +359,10 @@ export default function CaregiverScreen() {
     await updateDoc(doc(db, "caregiver_connections", connection.id), {
       status: "approved",
     });
+    Alert.alert(
+      "Connected",
+      `${connection.caregiverName} can now view your medication schedule.`,
+    );
   };
 
   // ─── Patient: reject ──────────────────────────
@@ -300,16 +391,20 @@ export default function CaregiverScreen() {
       userType === "patient"
         ? connection.caregiverName
         : connection.patientName;
-    Alert.alert("Disconnect", `Remove ${otherName} from your connections?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Disconnect",
-        style: "destructive",
-        onPress: async () => {
-          await deleteDoc(doc(db, "caregiver_connections", connection.id));
+    Alert.alert(
+      "Disconnect",
+      `Remove ${otherName} from your connections? They will no longer be able to view your medication schedule.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: async () => {
+            await deleteDoc(doc(db, "caregiver_connections", connection.id));
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
   // ─── Caregiver: cancel pending request ────────
@@ -440,7 +535,7 @@ export default function CaregiverScreen() {
               <Text style={styles.cardTitle}>Your Caregiver Code</Text>
             </View>
             <Text style={styles.cardSubtitle}>
-              Share this code with someone you trust. They'll send you a request
+              Share this code with people you trust. They'll send you a request
               which you can approve or reject.
             </Text>
             {loadingCode ? (
@@ -453,6 +548,27 @@ export default function CaregiverScreen() {
                 <View style={styles.codeBox}>
                   <Text style={styles.codeText}>{myCode}</Text>
                 </View>
+
+                {/* Code metadata */}
+                <View style={styles.codeMetaContainer}>
+                  {codeGeneratedAt && (
+                    <Text style={styles.codeMeta}>
+                      Generated {formatDate(codeGeneratedAt)}
+                    </Text>
+                  )}
+                  {codeExpiresAt?.toDate && (
+                    <Text
+                      style={[
+                        styles.codeMeta,
+                        isCodeExpired(codeExpiresAt) && styles.codeMetaExpired,
+                      ]}
+                    >
+                      Expires {codeExpiresAt.toDate().toLocaleDateString()}
+                      {isCodeExpired(codeExpiresAt) && " (Expired)"}
+                    </Text>
+                  )}
+                </View>
+
                 <View style={styles.codeActions}>
                   <TouchableOpacity
                     style={styles.shareButton}
@@ -613,8 +729,8 @@ export default function CaregiverScreen() {
           />
           <Text style={styles.infoText}>
             {userType === "patient"
-              ? "Caregivers can view your medication schedule and adherence history. You control who has access."
-              : "You can view the patient's medication schedule and track adherence once they approve your request."}
+              ? "Caregivers can view your medication schedule and adherence history. You control who has access. Regenerating your code creates a new code for future connections - existing caregivers keep access."
+              : "Once approved, you can view the patient's medication schedule and track adherence. You'll receive updates when they take their medications."}
           </Text>
         </View>
 
@@ -684,13 +800,27 @@ const styles = StyleSheet.create({
     borderStyle: "dashed",
     paddingVertical: 20,
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   codeText: {
     fontSize: 36,
     fontWeight: "800",
     color: Colors.primary,
     letterSpacing: 8,
+  },
+  codeMetaContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
+  codeMeta: {
+    fontSize: 11,
+    color: Colors.textTertiary,
+  },
+  codeMetaExpired: {
+    color: Colors.error,
+    fontWeight: "600",
   },
   codeActions: { flexDirection: "row", gap: 12 },
   shareButton: {
@@ -879,6 +1009,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: Colors.primary + "20",
+    marginBottom: 16,
   },
   infoText: {
     flex: 1,

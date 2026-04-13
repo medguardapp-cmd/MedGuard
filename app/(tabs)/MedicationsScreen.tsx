@@ -15,7 +15,7 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -209,40 +209,117 @@ export default function MedicationsScreen() {
   const [editingTimeIndex, setEditingTimeIndex] = useState<number | null>(null);
 
   // Get today's medications based on reminders and taken logs
-  const getTodaysMedications = (): Medication[] => {
-    const today = normalizeDate(new Date());
-    const todayDayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+  const getTodaysMedications = useCallback((): Medication[] => {
+    const today = new Date();
+    const normalizedToday = normalizeDate(today);
+    const todayDayName = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+    ][today.getDay()];
+    const todayShortName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
       today.getDay()
     ];
-    const todayDateKey = today.toDateString();
+    const todayDateKey = normalizedToday.toDateString();
 
+    console.log("=== getTodaysMedications Debug ===");
+    console.log("Today:", normalizedToday.toDateString());
+
+    // Get medication IDs from reminders that are active for today
     const scheduledTodayIds = reminders
       .filter((r) => {
         if (!r.enabled) return false;
-        if (!r.days || r.days.length === 0) {
+
+        // Check if it's a one-time reminder (no days selected)
+        const isOneTime = !r.days || r.days.length === 0;
+
+        if (isOneTime) {
+          // ✅ FIX: Handle one-time reminders without scheduledDate
           if (r.scheduledDate) {
             const scheduledDate = normalizeDate(new Date(r.scheduledDate));
-            return scheduledDate.getTime() === today.getTime();
+            const isToday =
+              scheduledDate.getTime() === normalizedToday.getTime();
+            console.log(
+              `One-time reminder ${r.medicationName}: has scheduledDate, is today: ${isToday}`,
+            );
+            return isToday;
           }
-          return false;
+
+          // ✅ NEW: For one-time reminders without scheduledDate, check if they should be active today
+          // Get the reminder's creation date
+          const createdDate = r.createdAt?.toDate
+            ? r.createdAt.toDate()
+            : new Date(r.createdAt);
+          const normalizedCreated = normalizeDate(createdDate);
+
+          // Get the first time from the times array
+          const firstTime =
+            r.times && r.times.length > 0 ? r.times[0] : "08:00";
+          const [hours, minutes] = firstTime.split(":").map(Number);
+
+          // Calculate when this reminder should first appear
+          const reminderDateTime = new Date(createdDate);
+          reminderDateTime.setHours(hours, minutes, 0, 0);
+
+          // If the time has passed on creation day, it schedules for the next day
+          const now = new Date();
+          if (reminderDateTime <= now) {
+            reminderDateTime.setDate(reminderDateTime.getDate() + 1);
+          }
+
+          const scheduledDay = normalizeDate(reminderDateTime);
+          const isToday = scheduledDay.getTime() === normalizedToday.getTime();
+
+          console.log(`One-time reminder ${r.medicationName}:`, {
+            createdDate: normalizedCreated.toDateString(),
+            firstTime: firstTime,
+            scheduledDay: scheduledDay.toDateString(),
+            isToday: isToday,
+          });
+
+          return isToday;
         }
-        return r.days.includes(todayDayName);
+
+        // For recurring reminders, check if today's day name is in days array
+        const hasDay =
+          r.days.includes(todayDayName) || r.days.includes(todayShortName);
+        console.log(
+          `Recurring reminder ${r.medicationName}: has today: ${hasDay}`,
+        );
+        return hasDay;
       })
       .map((r) => r.medicationId);
 
+    // Get medication IDs from taken logs for today
     const takenTodayIds = takenLogs
       .filter((log) => log.dateKey === todayDateKey)
       .map((log) => log.medicationId)
-      .filter((id) => id);
+      .filter((id) => id && id !== "quick-take");
 
+    // Combine both sources and remove duplicates
     const allTodaysMedIds = [
       ...new Set([...scheduledTodayIds, ...takenTodayIds]),
     ];
 
-    return medications.filter(
+    console.log("Scheduled today IDs:", scheduledTodayIds);
+    console.log("Taken today IDs:", takenTodayIds);
+    console.log("All IDs for today:", allTodaysMedIds);
+
+    // Filter active medications
+    const result = medications.filter(
       (m) => m.active && allTodaysMedIds.includes(m.id),
     );
-  };
+    console.log(
+      "Final medications:",
+      result.map((m) => m.name),
+    );
+
+    return result;
+  }, [reminders, takenLogs, medications]);
 
   // Load data
   useEffect(() => {
@@ -262,7 +339,6 @@ export default function MedicationsScreen() {
           })) as Medication[],
         );
         setLoading(false);
-        setReactionsLoaded(false);
       },
     );
 
@@ -275,7 +351,6 @@ export default function MedicationsScreen() {
             ...doc.data(),
           })) as Reminder[],
         );
-        setReactionsLoaded(false);
       },
     );
 
@@ -303,7 +378,6 @@ export default function MedicationsScreen() {
             ...doc.data(),
           })) as TakenLog[],
         );
-        setReactionsLoaded(false);
       },
     );
 
@@ -319,7 +393,7 @@ export default function MedicationsScreen() {
     if (activeTab === "reactions" && !reactionsLoaded && !loadingReactions) {
       loadReactions();
     }
-  }, [activeTab, reactionsLoaded]);
+  }, [activeTab, reactionsLoaded, loadingReactions]);
 
   // ─── One-time migration: stamp createdAt on old reminders ───────
   useEffect(() => {
@@ -484,7 +558,7 @@ export default function MedicationsScreen() {
                   medicationId: docRef.id,
                   medicationName: newMed.name,
                   medicationDosage: newMed.dosage,
-                  time: ["08:00"],
+                  times: ["08:00"],
                   days: [],
                   enabled: true,
                   sound: true,
