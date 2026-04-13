@@ -1,8 +1,9 @@
+// app/(tabs)/_layout.tsx - 5 TABS ONLY (NO CAREGIVER TAB)
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React from "react";
 import { StyleSheet } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context"; // ✅
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { Colors } from "@/constants/theme";
@@ -11,7 +12,7 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 export default function TabLayout() {
   const colorScheme = useColorScheme();
   const tint = Colors[colorScheme ?? "light"].tint;
-  const insets = useSafeAreaInsets(); // ✅
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -20,14 +21,8 @@ export default function TabLayout() {
         tabBarShowLabel: false,
         tabBarActiveTintColor: tint,
         tabBarInactiveTintColor: "#999",
-
         tabBarButton: HapticTab,
-
-        // 🔥 Minimalist floating style
-        tabBarStyle: [
-          styles.tabBar,
-          { bottom: insets.bottom + 5 }, // ✅ add safe area
-        ],
+        tabBarStyle: [styles.tabBar, { bottom: insets.bottom + 5 }],
         tabBarItemStyle: styles.item,
       }}
     >
@@ -76,14 +71,10 @@ export default function TabLayout() {
         }}
       />
 
-      {/* ✅ Add the Medication Logs screen - hidden from tab bar */}
       <Tabs.Screen
         name="medication-logs"
         options={{
-          href: null, // This hides it from the tab bar
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="calendar-outline" size={22} color={color} />
-          ),
+          href: null,
         }}
       />
     </Tabs>
@@ -96,19 +87,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     marginHorizontal: 10,
-
     height: 60,
     borderRadius: 30,
-
     backgroundColor: "rgba(255,255,255,0.98)",
     borderTopWidth: 0,
-
     elevation: 8,
     shadowColor: "#000",
     shadowOpacity: 0.08,
     shadowRadius: 10,
   },
-
   item: {
     paddingVertical: 10,
   },

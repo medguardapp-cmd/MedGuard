@@ -1,3 +1,4 @@
+// app/(tabs)/caregiver.tsx - COMPLETE CLEAN VERSION
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
@@ -30,7 +31,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../constants/colors";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import { auth, db } from "../lib/firebase";
-import { CaregiverConnection, PermissionLevel } from "../types/caregiver";
+import {
+  CaregiverConnection,
+  PERMISSION_PRESETS,
+  PermissionPreset,
+  getPresetInfo,
+} from "../types/caregiver";
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -66,26 +72,8 @@ function isCodeExpired(expiresAt: any): boolean {
   return expiresAt.toDate() < new Date();
 }
 
-function getPermissionLabel(permission: PermissionLevel): string {
-  switch (permission) {
-    case "full_access":
-      return "Full Access";
-    case "reminders_only":
-      return "Reminders Only";
-    default:
-      return "View Only";
-  }
-}
-
-function getPermissionDescription(permission: PermissionLevel): string {
-  switch (permission) {
-    case "full_access":
-      return "Can view all data, mark medications as taken, and manage reminders";
-    case "reminders_only":
-      return "Can receive medication reminders and view adherence only";
-    default:
-      return "Can view medication schedule and adherence history";
-  }
+function getPresetDisplayName(preset: PermissionPreset): string {
+  return getPresetInfo(preset).name;
 }
 
 // ─────────────────────────────────────────────
@@ -94,7 +82,7 @@ function getPermissionDescription(permission: PermissionLevel): string {
 export default function CaregiverScreen() {
   const router = useRouter();
   const { data } = useOnboarding();
-  const userType = data.userData.userType; // "patient" | "caregiver"
+  const userType = data.userData.userType;
 
   const [myCode, setMyCode] = useState<string | null>(null);
   const [codeExpiresAt, setCodeExpiresAt] = useState<any>(null);
@@ -117,8 +105,8 @@ export default function CaregiverScreen() {
   const [permissionModalVisible, setPermissionModalVisible] = useState(false);
   const [selectedConnection, setSelectedConnection] =
     useState<CaregiverConnection | null>(null);
-  const [selectedPermissions, setSelectedPermissions] =
-    useState<PermissionLevel>("view_only");
+  const [selectedPreset, setSelectedPreset] =
+    useState<PermissionPreset>("view_only");
 
   const userId = auth.currentUser?.uid;
   const userEmail = auth.currentUser?.email ?? "";
@@ -137,7 +125,6 @@ export default function CaregiverScreen() {
         setCodeExpiresAt(userData.caregiverCodeExpiresAt);
         setCodeGeneratedAt(userData.caregiverCodeGeneratedAt);
 
-        // Check if code is expired
         if (isCodeExpired(userData.caregiverCodeExpiresAt)) {
           Alert.alert(
             "Code Expired",
@@ -151,7 +138,6 @@ export default function CaregiverScreen() {
           );
         }
       } else {
-        // Generate initial code with 30-day expiration
         const newCode = generateCode();
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 30);
@@ -212,7 +198,7 @@ export default function CaregiverScreen() {
   const handleRegenerateCode = () => {
     Alert.alert(
       "Regenerate Code?",
-      "Your current caregivers will NOT lose access - they are already connected. However, new caregivers will need to use the new code. Old pending requests will still work.",
+      "Your current caregivers will NOT lose access. New caregivers will need the new code.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -236,11 +222,7 @@ export default function CaregiverScreen() {
             });
             setMyCode(newCode);
             setCodeExpiresAt(expiresAt);
-
-            Alert.alert(
-              "Code Regenerated",
-              `Your new code is ${newCode}. Share this with new caregivers. Your existing connections remain active.`,
-            );
+            Alert.alert("Code Regenerated", `Your new code is ${newCode}`);
           },
         },
       ],
@@ -252,9 +234,8 @@ export default function CaregiverScreen() {
     const expiresText = codeExpiresAt?.toDate
       ? `\n\nThis code expires on: ${codeExpiresAt.toDate().toLocaleDateString()}`
       : "";
-
     await Share.share({
-      message: `Use this code to connect with me on MedGuard: ${myCode}${expiresText}\n\nDownload MedGuard to get started.`,
+      message: `Use this code to connect with me on MedGuard: ${myCode}${expiresText}`,
     });
   };
 
@@ -272,10 +253,7 @@ export default function CaregiverScreen() {
         query(collection(db, "users"), where("caregiverCode", "==", code)),
       );
       if (usersSnap.empty) {
-        Alert.alert(
-          "Code Not Found",
-          "No patient found with that code. Please check and try again.",
-        );
+        Alert.alert("Code Not Found", "No patient found with that code.");
         setConnectingCode(false);
         return;
       }
@@ -283,12 +261,8 @@ export default function CaregiverScreen() {
       const patientId = patientDoc.id;
       const patientData = patientDoc.data();
 
-      // Check if code is expired
       if (isCodeExpired(patientData.caregiverCodeExpiresAt)) {
-        Alert.alert(
-          "Code Expired",
-          "This patient's code has expired. Ask them to generate a new code.",
-        );
+        Alert.alert("Code Expired", "This patient's code has expired.");
         setConnectingCode(false);
         return;
       }
@@ -309,17 +283,13 @@ export default function CaregiverScreen() {
       if (!existingSnap.empty) {
         const existing = existingSnap.docs[0].data();
         if (existing.status === "pending") {
-          Alert.alert(
-            "Request Sent",
-            "You already have a pending request with this patient.",
-          );
+          Alert.alert("Request Sent", "You already have a pending request.");
         } else if (existing.status === "approved") {
           Alert.alert(
             "Already Connected",
             "You are already connected to this patient.",
           );
         } else {
-          // Rejected — allow re-request
           await updateDoc(
             doc(db, "caregiver_connections", existingSnap.docs[0].id),
             {
@@ -327,11 +297,7 @@ export default function CaregiverScreen() {
               connectedAt: serverTimestamp(),
             },
           );
-          setInputCode("");
-          Alert.alert(
-            "Request Sent!",
-            `Your request has been sent to ${patientData.name ?? "the patient"}.`,
-          );
+          Alert.alert("Request Sent!", `Your request has been resent.`);
         }
         setConnectingCode(false);
         return;
@@ -346,12 +312,12 @@ export default function CaregiverScreen() {
         caregiverEmail: userEmail,
         connectedAt: serverTimestamp(),
         status: "pending",
-        permissions: "view_only", // Default permission
+        permissionPreset: "view_only",
       });
       setInputCode("");
       Alert.alert(
         "Request Sent!",
-        `Your request has been sent to ${patientData.name ?? "the patient"}. Waiting for their approval.`,
+        `Your request has been sent to ${patientData.name ?? "the patient"}.`,
       );
     } catch (err: any) {
       Alert.alert("Error", err.message ?? "Failed to send request.");
@@ -362,7 +328,7 @@ export default function CaregiverScreen() {
   // ─── Patient: approve with permissions ─────────
   const handleApproveWithPermissions = (connection: CaregiverConnection) => {
     setSelectedConnection(connection);
-    setSelectedPermissions(connection.permissions || "view_only");
+    setSelectedPreset(connection.permissionPreset || "view_only");
     setPermissionModalVisible(true);
   };
 
@@ -372,12 +338,13 @@ export default function CaregiverScreen() {
     await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
       status: "approved",
       approvedAt: serverTimestamp(),
-      permissions: selectedPermissions,
+      permissionPreset: selectedPreset,
+      permissions: PERMISSION_PRESETS[selectedPreset],
     });
 
     Alert.alert(
       "Connected",
-      `${selectedConnection.caregiverName} can now access your information with ${getPermissionLabel(selectedPermissions)} permissions.`,
+      `${selectedConnection.caregiverName} can now access your information with ${getPresetDisplayName(selectedPreset)} permissions.`,
     );
 
     setPermissionModalVisible(false);
@@ -387,7 +354,7 @@ export default function CaregiverScreen() {
   // ─── Patient: update permissions ──────────────
   const handleUpdatePermissions = (connection: CaregiverConnection) => {
     setSelectedConnection(connection);
-    setSelectedPermissions(connection.permissions || "view_only");
+    setSelectedPreset(connection.permissionPreset || "view_only");
     setPermissionModalVisible(true);
   };
 
@@ -395,13 +362,14 @@ export default function CaregiverScreen() {
     if (!selectedConnection) return;
 
     await updateDoc(doc(db, "caregiver_connections", selectedConnection.id), {
-      permissions: selectedPermissions,
+      permissionPreset: selectedPreset,
+      permissions: PERMISSION_PRESETS[selectedPreset],
       permissionsUpdatedAt: serverTimestamp(),
     });
 
     Alert.alert(
       "Permissions Updated",
-      `${selectedConnection.caregiverName}'s permissions have been updated to ${getPermissionLabel(selectedPermissions)}.`,
+      `${selectedConnection.caregiverName}'s permissions have been updated to ${getPresetDisplayName(selectedPreset)}.`,
     );
 
     setPermissionModalVisible(false);
@@ -412,7 +380,7 @@ export default function CaregiverScreen() {
   const handleReject = (connection: CaregiverConnection) => {
     Alert.alert(
       "Reject Request?",
-      `Deny ${connection.caregiverName}'s request to connect?`,
+      `Deny ${connection.caregiverName}'s request?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -435,20 +403,16 @@ export default function CaregiverScreen() {
       userType === "patient"
         ? connection.caregiverName
         : connection.patientName;
-    Alert.alert(
-      "Disconnect",
-      `Remove ${otherName} from your connections? They will no longer be able to view your medication schedule.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: async () => {
-            await deleteDoc(doc(db, "caregiver_connections", connection.id));
-          },
+    Alert.alert("Disconnect", `Remove ${otherName} from your connections?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Disconnect",
+        style: "destructive",
+        onPress: async () => {
+          await deleteDoc(doc(db, "caregiver_connections", connection.id));
         },
-      ],
-    );
+      },
+    ]);
   };
 
   // ─── Caregiver: cancel pending request ────────
@@ -470,96 +434,177 @@ export default function CaregiverScreen() {
   };
 
   // ─── Permission Modal ─────────────────────────
-  const PermissionModal = () => (
-    <Modal
-      animationType="slide"
-      transparent
-      visible={permissionModalVisible}
-      onRequestClose={() => setPermissionModalVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>
-              {selectedConnection?.status === "approved"
-                ? "Update Permissions"
-                : "Set Permissions"}
-            </Text>
-            <TouchableOpacity onPress={() => setPermissionModalVisible(false)}>
-              <Ionicons name="close" size={24} color={Colors.text} />
-            </TouchableOpacity>
-          </View>
+  // ─── Permission Modal (FIXED - No jumping/disappearing) ─────────
+  const PermissionModal = () => {
+    // Use local state to prevent re-renders from affecting the modal
+    const [localSelectedPreset, setLocalSelectedPreset] =
+      useState<PermissionPreset>(selectedPreset);
 
-          <Text style={styles.modalSubtitle}>
-            {selectedConnection?.status === "approved"
-              ? `Change what ${selectedConnection?.caregiverName} can access`
-              : `Choose what ${selectedConnection?.caregiverName} can access`}
-          </Text>
+    // Update local state when modal opens
+    useEffect(() => {
+      if (permissionModalVisible) {
+        setLocalSelectedPreset(selectedPreset);
+      }
+    }, [permissionModalVisible, selectedPreset]);
 
-          {(
-            ["view_only", "reminders_only", "full_access"] as PermissionLevel[]
-          ).map((level) => (
-            <TouchableOpacity
-              key={level}
-              style={[
-                styles.permissionOption,
-                selectedPermissions === level &&
-                  styles.permissionOptionSelected,
-              ]}
-              onPress={() => setSelectedPermissions(level)}
-            >
-              <View style={styles.permissionHeader}>
-                <Text
-                  style={[
-                    styles.permissionTitle,
-                    selectedPermissions === level &&
-                      styles.permissionTitleSelected,
-                  ]}
-                >
-                  {getPermissionLabel(level)}
-                </Text>
-                {selectedPermissions === level && (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={22}
-                    color={Colors.primary}
-                  />
-                )}
-              </View>
-              <Text style={styles.permissionDescription}>
-                {getPermissionDescription(level)}
-              </Text>
-            </TouchableOpacity>
-          ))}
+    const handleSelectPreset = (preset: PermissionPreset) => {
+      setLocalSelectedPreset(preset);
+    };
 
-          <View style={styles.modalFooter}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setPermissionModalVisible(false)}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={
-                selectedConnection?.status === "approved"
-                  ? handleConfirmUpdatePermissions
-                  : handleConfirmApprove
-              }
-            >
-              <Text style={styles.saveButtonText}>
+    const handleConfirm = async () => {
+      if (!selectedConnection) return;
+
+      if (selectedConnection.status === "approved") {
+        await updateDoc(
+          doc(db, "caregiver_connections", selectedConnection.id),
+          {
+            permissionPreset: localSelectedPreset,
+            permissions: PERMISSION_PRESETS[localSelectedPreset],
+            permissionsUpdatedAt: serverTimestamp(),
+          },
+        );
+        Alert.alert(
+          "Permissions Updated",
+          `${selectedConnection.caregiverName}'s permissions have been updated to ${getPresetDisplayName(localSelectedPreset)}.`,
+        );
+      } else {
+        await updateDoc(
+          doc(db, "caregiver_connections", selectedConnection.id),
+          {
+            status: "approved",
+            approvedAt: serverTimestamp(),
+            permissionPreset: localSelectedPreset,
+            permissions: PERMISSION_PRESETS[localSelectedPreset],
+          },
+        );
+        Alert.alert(
+          "Connected",
+          `${selectedConnection.caregiverName} can now access your information with ${getPresetDisplayName(localSelectedPreset)} permissions.`,
+        );
+      }
+
+      setPermissionModalVisible(false);
+      setSelectedConnection(null);
+      setSelectedPreset(localSelectedPreset);
+    };
+
+    const handleCancel = () => {
+      setPermissionModalVisible(false);
+      setSelectedConnection(null);
+    };
+
+    return (
+      <Modal
+        animationType="slide"
+        transparent
+        visible={permissionModalVisible}
+        onRequestClose={handleCancel}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
                 {selectedConnection?.status === "approved"
-                  ? "Update"
-                  : "Approve"}
+                  ? "Update Permissions"
+                  : "Set Permissions"}
               </Text>
-            </TouchableOpacity>
+              <TouchableOpacity onPress={handleCancel}>
+                <Ionicons name="close" size={24} color={Colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubtitle}>
+              {selectedConnection?.status === "approved"
+                ? `Change what ${selectedConnection?.caregiverName} can access`
+                : `Choose what ${selectedConnection?.caregiverName} can access`}
+            </Text>
+
+            <Text style={styles.presetHelpText}>
+              Select a permission level:
+            </Text>
+
+            <ScrollView
+              style={{ maxHeight: 400 }}
+              showsVerticalScrollIndicator={false}
+            >
+              {(
+                [
+                  "view_only",
+                  "reminder_assistant",
+                  "adherence_helper",
+                  "health_assistant",
+                  "full_access",
+                ] as PermissionPreset[]
+              ).map((preset) => {
+                const info = getPresetInfo(preset);
+                return (
+                  <TouchableOpacity
+                    key={preset}
+                    style={[
+                      styles.presetOption,
+                      localSelectedPreset === preset &&
+                        styles.presetOptionSelected,
+                      { borderLeftColor: info.color },
+                    ]}
+                    onPress={() => handleSelectPreset(preset)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.presetHeader}>
+                      <View style={styles.presetTitleContainer}>
+                        <Text style={styles.presetIcon}>{info.icon}</Text>
+                        <Text
+                          style={[
+                            styles.presetName,
+                            localSelectedPreset === preset &&
+                              styles.presetNameSelected,
+                          ]}
+                        >
+                          {info.name}
+                        </Text>
+                      </View>
+                      {localSelectedPreset === preset && (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={22}
+                          color={Colors.primary}
+                        />
+                      )}
+                    </View>
+                    <Text style={styles.presetDescription}>
+                      {info.description}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={handleCancel}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={handleConfirm}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.saveButtonText}>
+                  {selectedConnection?.status === "approved"
+                    ? "Update"
+                    : "Approve"}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
-  );
+      </Modal>
+    );
+  };
 
-  // ─── Card renderer with permission badge ────────
+  // ─── Card renderer ────────────────────────────
   const renderCard = (
     conn: CaregiverConnection,
     variant: "approve-reject" | "disconnect" | "cancel",
@@ -584,7 +629,7 @@ export default function CaregiverScreen() {
           <Text style={styles.connectionName}>{name}</Text>
           <Text style={styles.connectionEmail}>{email}</Text>
           <Text style={styles.connectionDate}>{dateLabel}</Text>
-          {variant === "disconnect" && conn.permissions && (
+          {variant === "disconnect" && conn.permissionPreset && (
             <View style={styles.permissionBadge}>
               <Ionicons
                 name="shield-checkmark"
@@ -592,7 +637,7 @@ export default function CaregiverScreen() {
                 color={Colors.primary}
               />
               <Text style={styles.permissionBadgeText}>
-                {getPermissionLabel(conn.permissions)}
+                {getPresetDisplayName(conn.permissionPreset)}
               </Text>
             </View>
           )}
@@ -687,7 +732,7 @@ export default function CaregiverScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── PATIENT: Code card ── */}
+        {/* PATIENT: Code card */}
         {userType === "patient" && (
           <View style={styles.card}>
             <View style={styles.cardHeader}>
@@ -708,8 +753,6 @@ export default function CaregiverScreen() {
                 <View style={styles.codeBox}>
                   <Text style={styles.codeText}>{myCode}</Text>
                 </View>
-
-                {/* Code metadata */}
                 <View style={styles.codeMetaContainer}>
                   {codeGeneratedAt && (
                     <Text style={styles.codeMeta}>
@@ -728,7 +771,6 @@ export default function CaregiverScreen() {
                     </Text>
                   )}
                 </View>
-
                 <View style={styles.codeActions}>
                   <TouchableOpacity
                     style={styles.shareButton}
@@ -758,7 +800,7 @@ export default function CaregiverScreen() {
           </View>
         )}
 
-        {/* ── PATIENT: Pending requests ── */}
+        {/* PATIENT: Pending requests */}
         {userType === "patient" && (
           <View style={styles.section}>
             <View style={styles.sectionTitleRow}>
@@ -793,7 +835,7 @@ export default function CaregiverScreen() {
           </View>
         )}
 
-        {/* ── CAREGIVER: Enter code ── */}
+        {/* CAREGIVER: Enter code */}
         {userType === "caregiver" && (
           <View style={styles.card}>
             <View style={styles.cardHeader}>
@@ -838,7 +880,7 @@ export default function CaregiverScreen() {
           </View>
         )}
 
-        {/* ── CAREGIVER: Pending sent requests ── */}
+        {/* CAREGIVER: Pending sent requests */}
         {userType === "caregiver" && sentRequests.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Pending Requests</Text>
@@ -846,7 +888,7 @@ export default function CaregiverScreen() {
           </View>
         )}
 
-        {/* ── Both: Approved connections ── */}
+        {/* Both: Approved connections */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
             {userType === "patient" ? "My Caregivers" : "My Patients"}
@@ -889,7 +931,7 @@ export default function CaregiverScreen() {
           />
           <Text style={styles.infoText}>
             {userType === "patient"
-              ? "Caregivers can view your medication schedule and adherence history. You control who has access and what they can see. Regenerating your code creates a new code for future connections - existing caregivers keep access."
+              ? "Caregivers can view your medication schedule and adherence history. You control who has access and what they can see."
               : "Once approved, you can view the patient's medication schedule and track adherence based on the permissions they grant you."}
           </Text>
         </View>
@@ -897,7 +939,6 @@ export default function CaregiverScreen() {
         <View style={{ height: 32 }} />
       </ScrollView>
 
-      {/* Permission Modal */}
       <PermissionModal />
     </SafeAreaView>
   );
@@ -1178,5 +1219,175 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textSecondary,
     lineHeight: 19,
+  },
+  // Add these missing styles to your StyleSheet
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 20,
+    width: "90%",
+    maxWidth: 400,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: Colors.text,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginBottom: 20,
+  },
+  permissionOption: {
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  permissionOptionSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primary + "05",
+  },
+  permissionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  permissionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: Colors.text,
+  },
+  permissionTitleSelected: {
+    color: Colors.primary,
+  },
+  permissionDescription: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  modalFooter: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 20,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  cancelButton: {
+    backgroundColor: Colors.border,
+  },
+  cancelButtonText: {
+    color: Colors.textSecondary,
+    fontWeight: "600",
+  },
+  saveButton: {
+    backgroundColor: Colors.primary,
+  },
+  saveButtonText: {
+    color: Colors.surface,
+    fontWeight: "600",
+  },
+  connectionActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  iconButton: {
+    padding: 8,
+  },
+  permissionBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.primary + "10",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    alignSelf: "flex-start",
+    marginTop: 4,
+  },
+  permissionBadgeText: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: "500",
+  },
+  presetHelpText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 12,
+    fontWeight: "500",
+  },
+  presetOption: {
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+  },
+  presetOptionSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primary + "05",
+  },
+  presetHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  presetTitleContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  presetIcon: {
+    fontSize: 20,
+  },
+  presetName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: Colors.text,
+  },
+  presetNameSelected: {
+    color: Colors.primary,
+  },
+  presetDescription: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  permissionSummary: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  summaryText: {
+    fontSize: 11,
+    color: Colors.textTertiary,
   },
 });
