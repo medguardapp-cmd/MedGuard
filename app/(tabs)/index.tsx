@@ -1,4 +1,5 @@
 // app/(tabs)/index.tsx
+import { NotificationBell } from "@/components/NotificationBell";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
@@ -29,6 +30,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
+import { useNotifications } from "../../contexts/NotificationContext";
 import { useSelectedPatient } from "../../contexts/SelectedPatientContext";
 import { useCaregiverPermissions } from "../../hooks/useCaregiverPermissions";
 import { auth, db } from "../../lib/firebase";
@@ -38,7 +40,13 @@ import {
   searchMedicines,
 } from "../../lib/supabase";
 import { tabEvents } from "../../lib/tabEvents";
-
+import {
+  checkCaregiverPatientMissedDoses,
+  checkCaregiverRequests,
+  checkConsecutiveMissedDays,
+  checkMissedAndLateDoses,
+  checkSevereInteractions,
+} from "../../services/notificationService";
 const DAY_WIDTH = 50;
 
 // ─────────────────────────────────────────────
@@ -533,6 +541,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
+  const { addNotification } = useNotifications();
+
   const [medications, setMedications] = useState<Medication[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
@@ -560,16 +570,83 @@ export default function HomeScreen() {
   const [quickTakeShowSuggestions, setQuickTakeShowSuggestions] =
     useState(false);
 
+  const { selectedPatientId, setSelectedPatientId, userType } =
+    useSelectedPatient();
+  const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
+  const [showPatientSelector, setShowPatientSelector] = useState(false);
+
+  const notifiedLateRef = useRef<Set<string>>(new Set());
+  const notifiedMissedRef = useRef<Set<string>>(new Set());
+  const notifiedConsecutiveRef = useRef<Set<string>>(new Set());
+  const notifiedInteractionsRef = useRef<Set<string>>(new Set());
+  const notifiedRequestsRef = useRef<Set<string>>(new Set());
+  const caregiverNotifiedMissedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const runChecks = async () => {
+      const userId = auth.currentUser?.uid;
+      if (!userId) return;
+
+      // Check for late/missed doses
+      await checkMissedAndLateDoses(
+        reminders,
+        takenLogs,
+        addNotification,
+        notifiedLateRef,
+        notifiedMissedRef,
+      );
+
+      // Check for consecutive missed days
+      await checkConsecutiveMissedDays(
+        reminders,
+        takenLogs,
+        addNotification,
+        notifiedConsecutiveRef,
+      );
+
+      // Check for severe interactions
+      if (interactions.length > 0) {
+        await checkSevereInteractions(
+          medications,
+          interactions,
+          addNotification,
+          notifiedInteractionsRef,
+        );
+      }
+
+      // Check for caregiver requests (for patients)
+      if (userType === "patient") {
+        await checkCaregiverRequests(
+          userId,
+          addNotification,
+          notifiedRequestsRef,
+        );
+      }
+
+      // Check for patient missed doses (for caregivers)
+      if (userType === "caregiver" && patients.length > 0) {
+        await checkCaregiverPatientMissedDoses(
+          patients,
+          addNotification,
+          caregiverNotifiedMissedRef,
+        );
+      }
+    };
+
+    // Run immediately
+    runChecks();
+
+    // Run every minute
+    const interval = setInterval(runChecks, 60000);
+
+    return () => clearInterval(interval);
+  }, [reminders, takenLogs, medications, interactions, patients, userType]);
+
   const scrollViewRef = useRef<ScrollView>(null);
   const missedWrittenDates = useRef<Set<string>>(new Set());
   const today = normalizeDate(new Date());
   const isTodaySelected =
     normalizeDate(selectedDate).getTime() === today.getTime();
-
-  const { selectedPatientId, setSelectedPatientId, userType } =
-    useSelectedPatient();
-  const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
-  const [showPatientSelector, setShowPatientSelector] = useState(false);
 
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
@@ -1251,13 +1328,7 @@ export default function HomeScreen() {
       <View style={styles.mainHeader}>
         <Text style={styles.headerTitle}>MEDGUARD</Text>
         <View style={styles.headerIcons}>
-          <TouchableOpacity style={styles.iconButton}>
-            <Ionicons
-              name="notifications-outline"
-              size={24}
-              color={Colors.surface}
-            />
-          </TouchableOpacity>
+          <NotificationBell />
           <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="person-outline" size={24} color={Colors.surface} />
           </TouchableOpacity>
@@ -1753,7 +1824,7 @@ export default function HomeScreen() {
               </>
             )}
 
-          {/* Quick Actions */}
+          {/* Quick Actions
           <Text style={styles.sectionTitle}>Quick Actions</Text>
           <View style={styles.actionsContainer}>
             <TouchableOpacity
@@ -1822,7 +1893,7 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.actionText}>SOS</Text>
             </TouchableOpacity>
-          </View>
+          </View> */}
 
           {/* Log a Dose chips */}
           {isTodaySelected &&
@@ -2218,7 +2289,7 @@ const styles = StyleSheet.create({
   medicationItemLast: { borderBottomWidth: 0 },
   medicationItemMissed: { backgroundColor: Colors.error + "06" },
   timeColumn: { width: 64, alignItems: "flex-start" },
-  medTime: { fontSize: 13, fontWeight: "600", color: Colors.primary },
+  medTime: { fontSize: 12, fontWeight: "600", color: Colors.primary },
   medTimeMissed: { color: Colors.textTertiary },
   medInfo: { flex: 1 },
   medNameRow: {
@@ -2227,9 +2298,9 @@ const styles = StyleSheet.create({
     gap: 6,
     flexWrap: "wrap",
   },
-  medName: { fontSize: 15, fontWeight: "600", color: Colors.text },
+  medName: { fontSize: 13, fontWeight: "600", color: Colors.text },
   medNameMissed: { color: Colors.textSecondary },
-  medDosage: { fontSize: 13, color: Colors.textSecondary, marginTop: 1 },
+  medDosage: { fontSize: 10, color: Colors.textSecondary, marginTop: 1 },
   medDosageMissed: { color: Colors.textTertiary },
   takenBadge: {
     flexDirection: "row",
@@ -2240,7 +2311,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
   },
-  takenBadgeText: { fontSize: 11, color: Colors.success, fontWeight: "600" },
+  takenBadgeText: { fontSize: 10, color: Colors.success, fontWeight: "600" },
   missedBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -2250,7 +2321,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
   },
-  missedBadgeText: { fontSize: 11, color: Colors.error, fontWeight: "600" },
+  missedBadgeText: { fontSize: 10, color: Colors.error, fontWeight: "600" },
   lateBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -2260,7 +2331,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 6,
   },
-  lateBadgeText: { fontSize: 11, color: Colors.warning, fontWeight: "600" },
+  lateBadgeText: { fontSize: 10, color: Colors.warning, fontWeight: "600" },
   tagRow: { flexDirection: "row", gap: 6, marginTop: 4, flexWrap: "wrap" },
   interactionTag: {
     flexDirection: "row",
@@ -2280,7 +2351,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   takenButton: { backgroundColor: Colors.success + "20" },
-  takeButtonText: { color: Colors.primary, fontWeight: "600", fontSize: 14 },
+  takeButtonText: { color: Colors.primary, fontWeight: "600", fontSize: 10 },
   takenButtonText: { color: Colors.success },
   pastTakenBadge: { padding: 4 },
   futureIcon: { padding: 4 },

@@ -41,6 +41,10 @@ import {
   checkAllInteractions,
   searchMedicines,
 } from "../../lib/supabase";
+import {
+  cancelMedicationAlarm,
+  scheduleMedicationAlarm,
+} from "../../services/reminderAlarmService";
 import { MedicationsTab } from "./MedicationsTab";
 import { ReactionsTab } from "./ReactionsTab";
 import { RemindersTab } from "./RemindersTab";
@@ -477,7 +481,7 @@ export default function MedicationsScreen() {
     if (activeTab === "reactions" && !reactionsLoaded && !loadingReactions) {
       loadReactions();
     }
-  }, [activeTab, reactionsLoaded, loadingReactions]);
+  }, [activeTab, reactionsLoaded, loadingReactions, loadReactions]);
 
   // ─── One-time migration: stamp createdAt on old reminders ───────
   useEffect(() => {
@@ -535,6 +539,72 @@ export default function MedicationsScreen() {
   useEffect(() => {
     setReactionsLoaded(false);
   }, [medications]);
+
+  // Add this after your other useEffects
+  useEffect(() => {
+    const scheduleExistingReminders = async () => {
+      const userId = user?.uid;
+      if (!userId || reminders.length === 0) return;
+
+      for (const reminder of reminders) {
+        if (!reminder.enabled) continue;
+
+        const isOneTime = !reminder.days || reminder.days.length === 0;
+
+        for (const time of reminder.times || ["08:00"]) {
+          const [hours, minutes] = time.split(":").map(Number);
+
+          if (isOneTime && reminder.scheduledDate) {
+            const alarmTime = new Date(reminder.scheduledDate);
+            // Only schedule if alarm time is in the future
+            if (alarmTime > new Date()) {
+              await scheduleMedicationAlarm(
+                `${userId}_${reminder.id}_${time}`,
+                reminder.medicationName,
+                reminder.medicationDosage,
+                alarmTime,
+                { repeat: false },
+              );
+            }
+          } else if (reminder.days && reminder.days.length > 0) {
+            const alarmTime = new Date();
+            alarmTime.setHours(hours, minutes, 0, 0);
+
+            const dayMap: { [key: string]: number } = {
+              Sun: 0,
+              Mon: 1,
+              Tue: 2,
+              Wed: 3,
+              Thu: 4,
+              Fri: 5,
+              Sat: 6,
+              Sunday: 0,
+              Monday: 1,
+              Tuesday: 2,
+              Wednesday: 3,
+              Thursday: 4,
+              Friday: 5,
+              Saturday: 6,
+            };
+
+            const weekdays = reminder.days
+              .map((day) => dayMap[day])
+              .filter((d) => d !== undefined);
+
+            await scheduleMedicationAlarm(
+              `${userId}_${reminder.id}_${time}`,
+              reminder.medicationName,
+              reminder.medicationDosage,
+              alarmTime,
+              { repeat: true, weekdays },
+            );
+          }
+        }
+      }
+    };
+
+    scheduleExistingReminders();
+  }, [reminders, user?.uid]);
 
   const loadReactions = useCallback(async () => {
     const userId = user?.uid;
@@ -800,24 +870,84 @@ export default function MedicationsScreen() {
       durationType: reminderForm.durationType || "none",
       startDate: reminderForm.startDate || null,
       endDate: reminderForm.endDate || null,
-      scheduledDate: scheduledDate, // ✅ Store the calculated date
+      scheduledDate: scheduledDate,
       createdAt: serverTimestamp(),
     };
 
     try {
+      let reminderId: string;
+
       if (editingReminder) {
+        // Cancel old alarm before updating
+        await cancelMedicationAlarm(`${userId}_${editingReminder.id}`);
         await updateDoc(
           doc(db, "users", userId, "reminders", editingReminder.id),
           reminderData,
         );
+        reminderId = editingReminder.id;
         Alert.alert("Success", "Reminder updated");
       } else {
-        await addDoc(
+        const docRef = await addDoc(
           collection(db, "users", userId, "reminders"),
           reminderData,
         );
+        reminderId = docRef.id;
         Alert.alert("Success", "Reminder added");
       }
+
+      // ✅ Schedule the alarm if enabled
+      if (reminderData.enabled && times.length > 0) {
+        for (const time of times) {
+          const [hours, minutes] = time.split(":").map(Number);
+
+          if (isOneTime && scheduledDate) {
+            // One-time reminder
+            const alarmTime = new Date(scheduledDate);
+            await scheduleMedicationAlarm(
+              `${userId}_${reminderId}_${time}`,
+              reminderData.medicationName,
+              reminderData.medicationDosage,
+              alarmTime,
+              { repeat: false },
+            );
+          } else if (normalizedDays.length > 0) {
+            // Recurring reminder - schedule for each day
+            const alarmTime = new Date();
+            alarmTime.setHours(hours, minutes, 0, 0);
+
+            // Map days to weekday numbers (0 = Sunday, 1 = Monday, etc.)
+            const dayMap: { [key: string]: number } = {
+              Sun: 0,
+              Mon: 1,
+              Tue: 2,
+              Wed: 3,
+              Thu: 4,
+              Fri: 5,
+              Sat: 6,
+              Sunday: 0,
+              Monday: 1,
+              Tuesday: 2,
+              Wednesday: 3,
+              Thursday: 4,
+              Friday: 5,
+              Saturday: 6,
+            };
+
+            const weekdays = normalizedDays
+              .map((day) => dayMap[day])
+              .filter((d) => d !== undefined);
+
+            await scheduleMedicationAlarm(
+              `${userId}_${reminderId}_${time}`,
+              reminderData.medicationName,
+              reminderData.medicationDosage,
+              alarmTime,
+              { repeat: true, weekdays },
+            );
+          }
+        }
+      }
+
       setReminderModalVisible(false);
       setSelectedMedicationForReminder(null);
       setEditingReminder(null);
@@ -837,6 +967,13 @@ export default function MedicationsScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
+          // Cancel all alarms for this reminder
+          const reminder = reminders.find((r) => r.id === id);
+          if (reminder) {
+            for (const time of reminder.times || ["08:00"]) {
+              await cancelMedicationAlarm(`${userId}_${id}_${time}`);
+            }
+          }
           await deleteDoc(doc(db, "users", userId, "reminders", id));
         },
       },
@@ -846,6 +983,70 @@ export default function MedicationsScreen() {
   const handleToggleReminder = async (id: string, enabled: boolean) => {
     const userId = user?.uid;
     if (!userId) return;
+
+    const reminder = reminders.find((r) => r.id === id);
+
+    if (!enabled) {
+      // Cancel all alarms for this reminder
+      if (reminder) {
+        for (const time of reminder.times || ["08:00"]) {
+          await cancelMedicationAlarm(`${userId}_${id}_${time}`);
+        }
+      }
+    } else {
+      // Re-schedule alarms
+      if (reminder && reminder.times && reminder.times.length > 0) {
+        const isOneTime = !reminder.days || reminder.days.length === 0;
+
+        for (const time of reminder.times) {
+          const [hours, minutes] = time.split(":").map(Number);
+
+          if (isOneTime && reminder.scheduledDate) {
+            const alarmTime = new Date(reminder.scheduledDate);
+            await scheduleMedicationAlarm(
+              `${userId}_${id}_${time}`,
+              reminder.medicationName,
+              reminder.medicationDosage,
+              alarmTime,
+              { repeat: false },
+            );
+          } else if (reminder.days && reminder.days.length > 0) {
+            const alarmTime = new Date();
+            alarmTime.setHours(hours, minutes, 0, 0);
+
+            const dayMap: { [key: string]: number } = {
+              Sun: 0,
+              Mon: 1,
+              Tue: 2,
+              Wed: 3,
+              Thu: 4,
+              Fri: 5,
+              Sat: 6,
+              Sunday: 0,
+              Monday: 1,
+              Tuesday: 2,
+              Wednesday: 3,
+              Thursday: 4,
+              Friday: 5,
+              Saturday: 6,
+            };
+
+            const weekdays = reminder.days
+              .map((day) => dayMap[day])
+              .filter((d) => d !== undefined);
+
+            await scheduleMedicationAlarm(
+              `${userId}_${id}_${time}`,
+              reminder.medicationName,
+              reminder.medicationDosage,
+              alarmTime,
+              { repeat: true, weekdays },
+            );
+          }
+        }
+      }
+    }
+
     await updateDoc(doc(db, "users", userId, "reminders", id), { enabled });
   };
 
@@ -1422,13 +1623,13 @@ export default function MedicationsScreen() {
                     {selectedMedicationForReminder.name}{" "}
                     {selectedMedicationForReminder.dosage}
                   </Text>
-                  <TouchableOpacity
+                  {/* <TouchableOpacity
                     onPress={() => setSelectedMedicationForReminder(null)}
                   >
                     <Text style={{ color: Colors.error, fontSize: 12 }}>
                       Change
                     </Text>
-                  </TouchableOpacity>
+                  </TouchableOpacity> */}
                 </View>
 
                 <View style={styles.formGroup}>
@@ -1907,7 +2108,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  headerTitle: { fontSize: 28, fontWeight: "bold", color: Colors.text },
+  headerTitle: { fontSize: 20, fontWeight: "bold", color: Colors.text },
   headerButtons: { flexDirection: "row", gap: 16 },
   searchContainer: {
     flexDirection: "row",
@@ -1916,12 +2117,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginBottom: 16,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 16, color: Colors.text },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 13, color: Colors.text },
   tabContainer: {
     flexDirection: "row",
     paddingHorizontal: 20,
@@ -1936,7 +2137,7 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   activeTab: { borderBottomColor: Colors.primary },
-  tabText: { fontSize: 14, color: Colors.textSecondary, fontWeight: "500" },
+  tabText: { fontSize: 13, color: Colors.textSecondary, fontWeight: "500" },
   activeTabText: { color: Colors.primary, fontWeight: "600" },
   tabBadge: {
     position: "absolute",
@@ -1953,7 +2154,6 @@ const styles = StyleSheet.create({
   tabBadgeText: { fontSize: 10, color: Colors.surface, fontWeight: "700" },
   content: { flex: 1, paddingHorizontal: 20 },
 
-  // Modal styles
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
@@ -1972,7 +2172,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 20,
   },
-  modalTitle: { fontSize: 20, fontWeight: "bold", color: Colors.text },
+  modalTitle: { fontSize: 16, fontWeight: "bold", color: Colors.text },
   modalFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1992,13 +2192,13 @@ const styles = StyleSheet.create({
   },
   saveButton: { backgroundColor: Colors.primary },
   warningButton: { backgroundColor: Colors.warning },
-  cancelButtonText: { color: Colors.text, fontSize: 16, fontWeight: "600" },
-  saveButtonText: { color: Colors.surface, fontSize: 16, fontWeight: "600" },
+  cancelButtonText: { color: Colors.text, fontSize: 13, fontWeight: "600" },
+  saveButtonText: { color: Colors.surface, fontSize: 13, fontWeight: "600" },
 
   // Form styles
   formGroup: { marginBottom: 16 },
   label: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "500",
     color: Colors.text,
     marginBottom: 6,
@@ -2009,7 +2209,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     borderRadius: 12,
     padding: 12,
-    fontSize: 16,
+    fontSize: 12,
     color: Colors.text,
   },
   textArea: { minHeight: 80, textAlignVertical: "top" },
@@ -2083,9 +2283,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   selectedMedicationName: {
-    fontSize: 16,
+    fontSize: 15,
     color: Colors.primary,
     fontWeight: "600",
+    marginBottom: 20,
   },
 
   // Reminder specific
@@ -2122,7 +2323,7 @@ const styles = StyleSheet.create({
   },
   timePickerButtonText: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 13,
     color: Colors.text,
     fontWeight: "500",
   },
@@ -2156,12 +2357,12 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   selectorMedName: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "500",
     color: Colors.text,
     marginBottom: 4,
   },
-  selectorMedDosage: { fontSize: 14, color: Colors.textSecondary },
+  selectorMedDosage: { fontSize: 10, color: Colors.textSecondary },
 
   // Symptom log specific
   severityContainer: { flexDirection: "row", gap: 8, marginTop: 4 },

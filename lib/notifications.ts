@@ -37,6 +37,15 @@ export async function registerForPushNotificationsAsync() {
       importance: Notifications.AndroidImportance.DEFAULT,
       sound: "default",
     });
+    await Notifications.setNotificationChannelAsync("medication-alarms", {
+      name: "Medication Alarms",
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#FF231F7C",
+      sound: "default",
+      bypassDnd: true, // Bypass Do Not Disturb for alarms
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    });
   }
 
   if (Device.isDevice) {

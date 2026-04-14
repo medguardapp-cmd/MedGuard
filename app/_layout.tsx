@@ -1,4 +1,5 @@
 // app/_layout.tsx
+import { NotificationProvider } from "@/contexts/NotificationContext";
 import * as Notifications from "expo-notifications";
 import { Slot, SplashScreen, useRouter, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -22,6 +23,7 @@ import {
   requestNotificationPermissions,
   setupNotificationChannel,
 } from "../lib/notifications";
+
 
 const ONBOARDING_COMPLETED_KEY = "@medguard_onboarding_completed";
 
@@ -203,7 +205,9 @@ function RootLayoutNav() {
 export default function RootLayout() {
   return (
     <OnboardingProvider>
-      <RootLayoutNav />
+      <NotificationProvider>
+        <RootLayoutNav />
+      </NotificationProvider>
     </OnboardingProvider>
   );
 }

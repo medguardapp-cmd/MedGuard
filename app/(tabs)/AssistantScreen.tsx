@@ -487,7 +487,7 @@ export default function AssistantScreen() {
               },
             ]}
           />
-          <TouchableOpacity style={styles.headerButton}>
+          {/* <TouchableOpacity style={styles.headerButton}>
             <Ionicons
               name="help-circle-outline"
               size={24}
@@ -500,7 +500,7 @@ export default function AssistantScreen() {
               size={24}
               color={Colors.primary}
             />
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
       </View>
 
@@ -613,7 +613,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-  headerTitle: { fontSize: 20, fontWeight: "bold", color: Colors.text },
+  headerTitle: { fontSize: 16, fontWeight: "bold", color: Colors.text },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 12 },
   headerButton: { padding: 4 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  quickActionsContent: { paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
+  quickActionsContent: { paddingHorizontal: 16, paddingVertical: 15, gap: 12 },
   quickAction: {
     flexDirection: "row",
     alignItems: "center",
@@ -635,7 +635,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary + "30",
     gap: 6,
   },
-  quickActionText: { fontSize: 14, color: Colors.primary, fontWeight: "500" },
+  quickActionText: { fontSize: 12, color: Colors.primary, fontWeight: "500" },
   messagesContainer: { flex: 1 },
   messagesList: { flex: 1 },
   messagesContent: { paddingHorizontal: 16, paddingVertical: 20 },
@@ -659,10 +659,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  messageText: { fontSize: 16, lineHeight: 22, color: Colors.text },
+  messageText: { fontSize: 12, lineHeight: 22, color: Colors.text },
   userMessageText: { color: Colors.surface },
   timestamp: {
-    fontSize: 10,
+    fontSize: 9,
     color: Colors.textTertiary,
     marginTop: 4,
     alignSelf: "flex-end",
@@ -682,9 +682,9 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border + "20",
   },
   medicationInfo: { flex: 1 },
-  medicationName: { fontSize: 14, fontWeight: "600", color: Colors.text },
-  medicationDosage: { fontSize: 12, color: Colors.textSecondary },
-  medicationTime: { fontSize: 11, color: Colors.primary, marginTop: 2 },
+  medicationName: { fontSize: 12, fontWeight: "600", color: Colors.text },
+  medicationDosage: { fontSize: 10, color: Colors.textSecondary },
+  medicationTime: { fontSize: 10, color: Colors.primary, marginTop: 2 },
   takenButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -714,7 +714,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
-  interactionMeds: { fontSize: 14, fontWeight: "600", color: Colors.text },
+  interactionMeds: { fontSize: 12, fontWeight: "600", color: Colors.text },
   severityBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 },
   severityText: {
     fontSize: 10,
@@ -731,12 +731,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border + "20",
   },
-  metricType: { fontSize: 14, color: Colors.text },
+  metricType: { fontSize: 12, color: Colors.text },
   metricValueContainer: { flexDirection: "row", alignItems: "center", gap: 4 },
-  metricValue: { fontSize: 16, fontWeight: "600", color: Colors.text },
+  metricValue: { fontSize: 13, fontWeight: "600", color: Colors.text },
   metricUnit: { fontSize: 12, color: Colors.textSecondary, marginRight: 4 },
   tipItem: { paddingVertical: 6 },
-  tipText: { fontSize: 14, color: Colors.text, lineHeight: 20 },
+  tipText: { fontSize: 12, color: Colors.text, lineHeight: 20 },
   emergencyContainer: {
     backgroundColor: Colors.error + "10",
     padding: 12,
@@ -751,7 +751,7 @@ const styles = StyleSheet.create({
   emergencyLabel: { fontSize: 14, fontWeight: "600", color: Colors.text },
   emergencyNumber: { fontSize: 16, fontWeight: "bold", color: Colors.error },
   emergencyStepsTitle: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
     color: Colors.text,
     marginTop: 8,
@@ -759,12 +759,12 @@ const styles = StyleSheet.create({
   },
   emergencyStep: { flexDirection: "row", gap: 8, marginBottom: 4 },
   emergencyStepNumber: {
-    fontSize: 14,
+    fontSize: 12,
     color: Colors.error,
     fontWeight: "600",
     width: 20,
   },
-  emergencyStepText: { flex: 1, fontSize: 14, color: Colors.text },
+  emergencyStepText: { flex: 1, fontSize: 12, color: Colors.text },
   typingIndicator: {
     flexDirection: "row",
     alignItems: "center",
@@ -782,7 +782,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 8,
   },
-  typingText: { fontSize: 14, color: Colors.textSecondary },
+  typingText: { fontSize: 12, color: Colors.textSecondary },
   inputContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -801,7 +801,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginHorizontal: 8,
     maxHeight: 100,
-    fontSize: 16,
+    fontSize: 12,
     color: Colors.text,
     borderWidth: 1,
     borderColor: Colors.border,

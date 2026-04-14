@@ -18,7 +18,7 @@ export default function TabLayout() {
         screenOptions={{
           headerShown: false,
           tabBarShowLabel: false,
-          tabBarActiveTintColor: Colors.primary, // Now this will work
+          tabBarActiveTintColor: Colors.primary,
           tabBarInactiveTintColor: "#999",
           tabBarButton: HapticTab,
           tabBarStyle: [styles.tabBar, { bottom: insets.bottom + 5 }],
@@ -63,6 +63,12 @@ export default function TabLayout() {
 
         <Tabs.Screen
           name="medication-logs"
+          options={{
+            href: null,
+          }}
+        />
+        <Tabs.Screen
+          name="notifications"
           options={{
             href: null,
           }}

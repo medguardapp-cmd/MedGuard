@@ -177,7 +177,7 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
 };
 
 const styles = StyleSheet.create({
-  remindersList: { paddingBottom: 20 },
+  remindersList: { paddingBottom: 100 },
   reminderCard: {
     backgroundColor: Colors.surface,
     borderRadius: 16,
@@ -197,12 +197,12 @@ const styles = StyleSheet.create({
   },
   nameBlock: { flex: 1, marginRight: 12 },
   reminderMedName: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "600",
     color: Colors.text,
     marginBottom: 2,
   },
-  reminderDosage: { fontSize: 13, color: Colors.textSecondary },
+  reminderDosage: { fontSize: 12, color: Colors.textSecondary },
   timePillsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   timePillText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "500",
     color: Colors.primary,
   },
@@ -243,5 +243,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 40,
   },
-  emptyStateText: { fontSize: 16, color: Colors.textTertiary, marginTop: 16 },
+  emptyStateText: { fontSize: 13, color: Colors.textTertiary, marginTop: 16 },
 });

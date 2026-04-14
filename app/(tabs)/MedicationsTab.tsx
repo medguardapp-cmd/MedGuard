@@ -186,7 +186,7 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
 };
 
 const styles = StyleSheet.create({
-  medicationsList: { paddingBottom: 20 },
+  medicationsList: { paddingBottom: 100 },
   medicationCard: {
     backgroundColor: Colors.surface,
     borderRadius: 16,
@@ -196,7 +196,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 1,
   },
   medicationHeader: {
     flexDirection: "row",
@@ -211,7 +211,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   medicationName: {
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: "bold",
     color: Colors.text,
     marginRight: 8,
@@ -222,20 +222,20 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: "600", color: Colors.text },
   actionButtons: { flexDirection: "row", gap: 12 },
   medicationDosage: {
-    fontSize: 14,
+    fontSize: 12,
     color: Colors.primary,
     fontWeight: "500",
     marginBottom: 4,
   },
   genericName: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textSecondary,
     marginBottom: 8,
     fontStyle: "italic",
   },
   medicationDetails: { gap: 8 },
   detailItem: { flexDirection: "row", alignItems: "center", gap: 8 },
-  detailText: { fontSize: 14, color: Colors.textSecondary, flex: 1 },
+  detailText: { fontSize: 12, color: Colors.textSecondary, flex: 1 },
   reminderBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   quickAddReminderText: {
-    fontSize: 14,
+    fontSize: 12,
     color: Colors.primary,
     fontWeight: "500",
   },
