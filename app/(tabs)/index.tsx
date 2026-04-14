@@ -1258,10 +1258,14 @@ export default function HomeScreen() {
       Alert.alert("Error", "Please enter a medication name");
       return;
     }
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+    if (!targetUserId) {
+      Alert.alert("Error", "Could not determine the target user");
+      return;
+    }
     try {
-      await addDoc(collection(db, "users", userId, "taken_logs"), {
+      await addDoc(collection(db, "users", targetUserId, "taken_logs"), {
         medicationId: quickTakeForm.medicationId || null,
         reminderId: "quick-take",
         name: quickTakeForm.name.trim(),
@@ -1368,9 +1372,9 @@ export default function HomeScreen() {
         <Text style={styles.headerTitle}>MEDGUARD</Text>
         <View style={styles.headerIcons}>
           <NotificationBell />
-          <TouchableOpacity style={styles.iconButton}>
+          {/* <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="person-outline" size={24} color={Colors.surface} />
-          </TouchableOpacity>
+          </TouchableOpacity> */}
         </View>
       </View>
 
