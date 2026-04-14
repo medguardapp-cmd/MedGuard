@@ -1,177 +1,201 @@
-import * as BackgroundFetch from "expo-background-fetch";
+// lib/notifications.ts
+import Constants from "expo-constants";
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import * as TaskManager from "expo-task-manager";
+import { Platform } from "react-native";
 
-const BACKGROUND_TASK = "MEDICATION_REMINDER_TASK";
-
-// ─── How notifications appear when app is open ───
+// Configure notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
     shouldPlaySound: true,
-    shouldSetBadge: false,
+    shouldSetBadge: true,
   }),
 });
 
-// ─── Request permissions ─────────────────────────
-export async function requestNotificationPermissions() {
-  const { status } = await Notifications.requestPermissionsAsync({
-    android: {
-      allowAlert: true,
-      allowSound: true,
-      allowVibrate: true,
+// Request permissions and get Expo push token
+export async function registerForPushNotificationsAsync() {
+  let token;
+
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("medications", {
+      name: "Medication Reminders",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#FF231F7C",
+      sound: "default",
+    });
+    await Notifications.setNotificationChannelAsync("interactions", {
+      name: "Drug Interactions",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#FF231F7C",
+      sound: "default",
+    });
+    await Notifications.setNotificationChannelAsync("general", {
+      name: "General",
+      importance: Notifications.AndroidImportance.DEFAULT,
+      sound: "default",
+    });
+  }
+
+  if (Device.isDevice) {
+    const { status: existingStatus } =
+      await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== "granted") {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    if (finalStatus !== "granted") {
+      console.log("Failed to get push token for push notification!");
+      return null;
+    }
+
+    try {
+      const projectId =
+        Constants.expoConfig?.extra?.eas?.projectId ??
+        Constants.expoConfig?.projectId;
+      if (!projectId) {
+        console.log("No project ID found");
+        return null;
+      }
+      token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+      console.log("Push token:", token);
+    } catch (error) {
+      console.error("Error getting push token:", error);
+    }
+  } else {
+    console.log("Must use physical device for Push Notifications");
+  }
+
+  return token;
+}
+
+// Save push token to Firestore
+export async function savePushTokenToFirestore(userId: string, token: string) {
+  const { doc, setDoc } = await import("firebase/firestore");
+  const { db } = await import("./firebase");
+
+  const userRef = doc(db, "users", userId);
+  await setDoc(
+    userRef,
+    {
+      pushToken: token,
+      pushTokenUpdatedAt: new Date(),
+    },
+    { merge: true },
+  );
+}
+
+// Send local notification
+export async function sendLocalNotification(
+  title: string,
+  body: string,
+  data?: any,
+  channelId?: string,
+) {
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      data: data || {},
+      sound: "default",
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      channelId: channelId || "general",
+    },
+    trigger: null, // null means show immediately
+  });
+}
+
+// Schedule a reminder notification
+export async function scheduleReminderNotification(
+  id: string,
+  title: string,
+  body: string,
+  date: Date,
+  data?: any,
+) {
+  // Cancel any existing notification with same ID
+  await Notifications.cancelScheduledNotificationAsync(id);
+
+  // Schedule new notification
+  await Notifications.scheduleNotificationAsync({
+    identifier: id,
+    content: {
+      title,
+      body,
+      data: { ...data, reminderId: id },
+      sound: "default",
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      channelId: "medications",
+    },
+    trigger: {
+      date: date,
+      channelId: "medications",
     },
   });
-  return status === "granted";
 }
 
-// ─── Set up Android notification channel ────────
-export async function setupNotificationChannel() {
-  await Notifications.setNotificationChannelAsync("medication-reminders", {
-    name: "Medication Reminders",
-    importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: [0, 250, 250, 250],
-    sound: "default",
-    enableVibrate: true,
-    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-  });
-}
-
-// ─── Schedule all reminders ──────────────────────
-export async function scheduleAllReminders(
-  reminders: {
-    id: strin;
-    medicationName: string;
-    medicationDosage: string;
-    time: string;
-    days: string[];
-    enabled: boolean;
-    sound: boolean;
-    vibrate: boolean;
-  }[],
+// Schedule daily recurring reminder
+export async function scheduleDailyReminder(
+  id: string,
+  title: string,
+  body: string,
+  hour: number,
+  minute: number,
+  days?: number[], // 0-6, where 0 is Sunday
 ) {
-  [];
-  // Cancel all existing scheduled notifications first
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Cancel existing
+  await Notifications.cancelScheduledNotificationAsync(id);
 
-  const enabledReminders = reminders.filter((r) => r.enabled);
+  const trigger: any = {
+    hour,
+    minute,
+    repeats: true,
+  };
 
-  for (const reminder of enabledReminders) {
-    await scheduleReminder(reminder);
+  if (days && days.length > 0) {
+    trigger.weekday = days.map((d) => d + 1); // Convert to 1-7 format
   }
-}
 
-// ─── Schedule a single reminder ──────────────────
-export async function scheduleReminder(reminder: {
-  id: string;
-  medicationName: string;
-  medicationDosage: string;
-  time: string;
-  days: string[];
-  enabled: boolean;
-  sound: boolean;
-  vibrate: boolean;
-}) {
-  const [hours, minutes] = reminder.time.split(":").map(Number);
-  const isOneTime = !reminder.days || reminder.days.length === 0;
-
-  if (isOneTime) {
-    // ── One-time: fire today or tomorrow ──
-    const fireDate = new Date();
-    fireDate.setHours(hours, minutes, 0, 0);
-
-    // If time already passed today, schedule for tomorrow
-    if (fireDate <= new Date()) {
-      fireDate.setDate(fireDate.getDate() + 1);
-    }
-
-    await Notifications.scheduleNotificationAsync({
-      identifier: `${reminder.id}-onetime`,
-      content: {
-        title: "💊 Time for your medication",
-        body: `${reminder.medicationName} — ${reminder.medicationDosage}`,
-        sound: reminder.sound ? "default" : undefined,
-        vibrate: reminder.vibrate ? [0, 250, 250, 250] : undefined,
-        data: {
-          reminderId: reminder.id,
-          isOneTime: true,
-        },
-        android: {
-          channelId: "medication-reminders",
-          priority: Notifications.AndroidNotificationPriority.MAX,
-        },
-      },
-      trigger: {
-        date: fireDate,
-        channelId: "medication-reminders",
-      },
-    });
-  } else {
-    // ── Repeating: schedule for each selected day ──
-    const DAY_MAP: Record<string, number> = {
-      Sun: 1,
-      Mon: 2,
-      Tue: 3,
-      Wed: 4,
-      Thu: 5,
-      Fri: 6,
-      Sat: 7,
-    };
-
-    for (const day of reminder.days) {
-      const weekday = DAY_MAP[day];
-      if (!weekday) continue;
-
-      await Notifications.scheduleNotificationAsync({
-        identifier: `${reminder.id}-${day}`,
-        content: {
-          title: "💊 Time for your medication",
-          body: `${reminder.medicationName} — ${reminder.medicationDosage}`,
-          sound: reminder.sound ? "default" : undefined,
-          vibrate: reminder.vibrate ? [0, 250, 250, 250] : undefined,
-          data: {
-            reminderId: reminder.id,
-            isOneTime: false,
-          },
-          android: {
-            channelId: "medication-reminders",
-            priority: Notifications.AndroidNotificationPriority.MAX,
-          },
-        },
-        trigger: {
-          weekday,
-          hour: hours,
-          minute: minutes,
-          repeats: true,
-          channelId: "medication-reminders",
-        },
-      });
-    }
-  }
-}
-
-// ─── Cancel a single reminder's notifications ────
-export async function cancelReminder(reminderId: string) {
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  const toCancel = scheduled.filter((n) => n.identifier.startsWith(reminderId));
-  for (const n of toCancel) {
-    await Notifications.cancelScheduledNotificationAsync(n.identifier);
-  }
-}
-
-// ─── Background task: auto-disable one-time ──────
-TaskManager.defineTask(BACKGROUND_TASK, async () => {
-  try {
-    return BackgroundFetch.BackgroundFetchResult.NewData;
-  } catch {
-    return BackgroundFetch.BackgroundFetchResult.Failed;
-  }
-});
-
-export async function registerBackgroundTask() {
-  await BackgroundFetch.registerTaskAsync(BACKGROUND_TASK, {
-    minimumInterval: 60,
-    stopOnTerminate: false,
-    startOnBoot: true,
+  await Notifications.scheduleNotificationAsync({
+    identifier: id,
+    content: {
+      title,
+      body,
+      sound: "default",
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      channelId: "medications",
+    },
+    trigger,
   });
+}
+
+// Cancel a scheduled notification
+export async function cancelNotification(identifier: string) {
+  await Notifications.cancelScheduledNotificationAsync(identifier);
+}
+
+// Get all scheduled notifications
+export async function getAllScheduledNotifications() {
+  return await Notifications.getAllScheduledNotificationsAsync();
+}
+
+// Add notification listener
+export function addNotificationListener(
+  onReceive: (notification: Notifications.Notification) => void,
+  onResponse: (response: Notifications.NotificationResponse) => void,
+) {
+  const receiveSubscription =
+    Notifications.addNotificationReceivedListener(onReceive);
+  const responseSubscription =
+    Notifications.addNotificationResponseReceivedListener(onResponse);
+
+  return () => {
+    receiveSubscription.remove();
+    responseSubscription.remove();
+  };
 }

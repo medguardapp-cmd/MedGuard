@@ -1,4 +1,4 @@
-// app/(tabs)/more.tsx (updated with button)
+// app/(tabs)/more.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { signOut } from "firebase/auth";
@@ -26,10 +26,7 @@ export default function MoreScreen() {
       "Logout",
       "Are you sure you want to logout?",
       [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
+        { text: "Cancel", style: "cancel" },
         {
           text: "Logout",
           style: "destructive",
@@ -37,7 +34,6 @@ export default function MoreScreen() {
             try {
               await signOut(auth);
               router.replace("/(auth)/onboarding");
-              console.log("User logged out successfully");
             } catch (error) {
               console.error("Error signing out:", error);
               Alert.alert("Error", "Failed to logout. Please try again.");
@@ -49,266 +45,187 @@ export default function MoreScreen() {
     );
   };
 
-  const getFirstName = () => {
-    return data.userData.name.split(" ")[0] || "";
-  };
-
+  const getFirstName = () => data.userData.name.split(" ")[0] || "";
   const getLastName = () => {
     const parts = data.userData.name.split(" ");
     return parts.length > 1 ? parts.slice(1).join(" ") : "";
   };
 
+  const getUserInitials = () => {
+    const firstName = getFirstName();
+    const lastName = getLastName();
+    return `${firstName.charAt(0)}${lastName.charAt(0) || ""}`.toUpperCase();
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView>
-        {/* Header with User Info */}
-        <View style={styles.header}>
-          <View style={styles.profileHeader}>
-            <View style={styles.profileIcon}>
-              <Ionicons name="person" size={32} color="#3b82f6" />
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Profile Header Section */}
+        <View style={styles.profileSection}>
+          <View style={styles.profileImageContainer}>
+            <View style={styles.profileImage}>
+              <Text style={styles.profileInitials}>{getUserInitials()}</Text>
             </View>
-            <View style={styles.profileInfo}>
-              <Text style={styles.userName}>
-                {getFirstName()} {getLastName()}
-              </Text>
-              <Text style={styles.userEmail}>{user?.email}</Text>
-              <Text style={styles.userType}>
-                {data.userData.userType === "patient"
-                  ? "👤 Patient"
-                  : "🤝 Caregiver"}
-              </Text>
-            </View>
+            <TouchableOpacity style={styles.editProfileIcon}>
+              <Ionicons name="camera" size={20} color="#ffffff" />
+            </TouchableOpacity>
           </View>
+
+          <Text style={styles.userName}>
+            {data.userData.name || "User Name"}
+          </Text>
+          <Text style={styles.userEmail}>{user?.email || "No email"}</Text>
+
+          <View style={styles.userTypeBadge}>
+            <Ionicons
+              name={
+                data.userData.userType === "patient"
+                  ? "person-outline"
+                  : "people-outline"
+              }
+              size={14}
+              color="#3b82f6"
+            />
+            <Text style={styles.userTypeText}>
+              {data.userData.userType === "patient" ? "Patient" : "Caregiver"}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.editProfileButton}
+            onPress={() => router.push("/edit-profile")}
+          >
+            <Ionicons name="create-outline" size={18} color="#3b82f6" />
+            <Text style={styles.editProfileButtonText}>Edit Profile</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Medication Logs Button - NEW */}
+        {/* Patient Information - Clickable Card */}
         <View style={styles.section}>
           <TouchableOpacity
-            style={styles.logsButton}
-            onPress={() => router.push("/(tabs)/medication-logs")}
+            style={styles.navButton}
+            onPress={() => router.push("/patient-info")} // Changed: removed (tabs) from path
           >
-            <View style={styles.logsButtonContent}>
-              <View style={styles.logsIconContainer}>
-                <Ionicons name="calendar" size={28} color="#3b82f6" />
+            <View style={styles.navButtonLeft}>
+              <View style={styles.navButtonIcon}>
+                <Ionicons name="medical-outline" size={24} color="#3b82f6" />
               </View>
-              <View style={styles.logsTextContainer}>
-                <Text style={styles.logsTitle}>Medication Logs</Text>
-                <Text style={styles.logsSubtitle}>
-                  View your medication history and adherence
+              <View>
+                <Text style={styles.navButtonTitle}>Patient Information</Text>
+                <Text style={styles.navButtonSubtitle}>
+                  View personal and medical details
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
             </View>
+            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
         </View>
 
-        {/* Personal Information Section */}
+        {/* Caregiver Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Information</Text>
-
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Full Name</Text>
-              <Text style={styles.infoValue}>
-                {data.userData.name || "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Date of Birth</Text>
-              <Text style={styles.infoValue}>
-                {data.userData.dateOfBirth || "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Gender</Text>
-              <Text style={styles.infoValue}>
-                {data.userData.gender
-                  ? data.userData.gender.charAt(0).toUpperCase() +
-                    data.userData.gender.slice(1)
-                  : "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Phone Number</Text>
-              <Text style={styles.infoValue}>
-                {data.userData.contactInfo?.phone
-                  ? `+63 ${data.userData.contactInfo.phone}`
-                  : "Not provided"}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Medical Information Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Medical Information</Text>
-
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Blood Type</Text>
-              <Text style={styles.infoValue}>
-                {data.medicalData.bloodType || "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Height</Text>
-              <Text style={styles.infoValue}>
-                {data.medicalData.height
-                  ? `${data.medicalData.height} cm`
-                  : "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Weight</Text>
-              <Text style={styles.infoValue}>
-                {data.medicalData.weight
-                  ? `${data.medicalData.weight} kg`
-                  : "Not provided"}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Medical Conditions</Text>
-              <View style={styles.listContainer}>
-                {data.medicalData.conditions.length > 0 ? (
-                  data.medicalData.conditions.map((condition, index) => (
-                    <View key={index} style={styles.listItem}>
-                      <Text style={styles.listItemText}>• {condition}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.infoValue}>None provided</Text>
-                )}
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Allergies</Text>
-              <View style={styles.listContainer}>
-                {data.medicalData.allergies.length > 0 ? (
-                  data.medicalData.allergies.map((allergy, index) => (
-                    <View key={index} style={styles.listItem}>
-                      <Text style={styles.listItemText}>• {allergy}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.infoValue}>None provided</Text>
-                )}
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Medications</Text>
-              <View style={styles.listContainer}>
-                {data.medicalData.medications.length > 0 ? (
-                  data.medicalData.medications.map((medication, index) => (
-                    <View key={index} style={styles.listItem}>
-                      <Text style={styles.listItemText}>• {medication}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.infoValue}>None provided</Text>
-                )}
-              </View>
-            </View>
-
-            {data.medicalData.notes ? (
-              <>
-                <View style={styles.divider} />
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Additional Notes</Text>
-                  <Text style={[styles.infoValue, styles.notesText]}>
-                    {data.medicalData.notes}
-                  </Text>
-                </View>
-              </>
-            ) : null}
-          </View>
-        </View>
-
-        {/* Actions Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account Actions</Text>
           <TouchableOpacity
-            style={styles.actionButton}
+            style={styles.navButton}
             onPress={() => router.push("/caregiver")}
           >
-            <View style={styles.actionButtonContent}>
-              <Ionicons name="people-outline" size={24} color="#3b82f6" />
-              <Text style={styles.actionButtonText}>Caregiver</Text>
+            <View style={styles.navButtonLeft}>
+              <View style={styles.navButtonIcon}>
+                <Ionicons name="people-outline" size={24} color="#3b82f6" />
+              </View>
+              <View>
+                <Text style={styles.navButtonTitle}>Caregiver</Text>
+                <Text style={styles.navButtonSubtitle}>
+                  Manage caregiver access and permissions
+                </Text>
+              </View>
             </View>
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
+        </View>
 
-          <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionButtonContent}>
-              <Ionicons name="create-outline" size={24} color="#3b82f6" />
-              <Text style={styles.actionButtonText}>Edit Profile</Text>
+        {/* Medication Logs Section */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.navButton}
+            onPress={() => router.push("/(tabs)/medication-logs")}
+          >
+            <View style={styles.navButtonLeft}>
+              <View style={styles.navButtonIcon}>
+                <Ionicons name="calendar-outline" size={24} color="#3b82f6" />
+              </View>
+              <View>
+                <Text style={styles.navButtonTitle}>Medication Logs</Text>
+                <Text style={styles.navButtonSubtitle}>
+                  View medication history and adherence
+                </Text>
+              </View>
             </View>
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
+        </View>
 
-          <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionButtonContent}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={24}
-                color="#3b82f6"
-              />
-              <Text style={styles.actionButtonText}>Privacy Settings</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
-          </TouchableOpacity>
+        {/* Settings Section */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="settings-outline" size={22} color="#64748b" />
+            <Text style={styles.sectionTitle}>Settings</Text>
+          </View>
 
-          <TouchableOpacity style={styles.actionButton}>
-            <View style={styles.actionButtonContent}>
+          <TouchableOpacity style={styles.settingItem}>
+            <View style={styles.settingItemLeft}>
               <Ionicons
                 name="notifications-outline"
-                size={24}
-                color="#3b82f6"
+                size={22}
+                color="#64748b"
               />
-              <Text style={styles.actionButtonText}>
+              <Text style={styles.settingItemText}>
                 Notification Preferences
               </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.settingItem}>
+            <View style={styles.settingItemLeft}>
+              <Ionicons
+                name="shield-checkmark-outline"
+                size={22}
+                color="#64748b"
+              />
+              <Text style={styles.settingItemText}>Privacy & Security</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.settingItem}>
+            <View style={styles.settingItemLeft}>
+              <Ionicons name="help-circle-outline" size={22} color="#64748b" />
+              <Text style={styles.settingItemText}>Help & Support</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.settingItem}>
+            <View style={styles.settingItemLeft}>
+              <Ionicons
+                name="information-circle-outline"
+                size={22}
+                color="#64748b"
+              />
+              <Text style={styles.settingItemText}>About MedGuard</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
         </View>
 
         {/* Logout Section */}
-        <View style={styles.logoutSection}>
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <View style={styles.logoutButtonContent}>
-              <Ionicons name="log-out-outline" size={24} color="#ef4444" />
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </View>
-          </TouchableOpacity>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <Ionicons name="log-out-outline" size={22} color="#ef4444" />
+          <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
 
+        <View style={styles.footer}>
           <Text style={styles.versionText}>MedGuard v1.0.0</Text>
-          <Text style={styles.dataNotice}>
-            🔒 Your data is securely stored in Firebase
-          </Text>
+          <Text style={styles.dataNotice}>🔒 Your data is securely stored</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -320,188 +237,188 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#f8fafc",
   },
-  header: {
-    padding: 24,
-    paddingBottom: 20,
+  profileSection: {
+    alignItems: "center",
+    paddingTop: 32,
+    paddingBottom: 24,
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
   },
-  profileHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
+  profileImageContainer: {
+    position: "relative",
+    marginBottom: 16,
   },
-  profileIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "#eff6ff",
+  profileImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "#3b82f6",
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#dbeafe",
+    borderWidth: 3,
+    borderColor: "#ffffff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  profileInfo: {
-    flex: 1,
+  profileInitials: {
+    fontSize: 36,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
+  editProfileIcon: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    backgroundColor: "#3b82f6",
+    borderRadius: 20,
+    padding: 6,
+    borderWidth: 2,
+    borderColor: "#ffffff",
   },
   userName: {
-    fontSize: 22,
-    fontWeight: "bold",
+    fontSize: 24,
+    fontWeight: "700",
     color: "#0f172a",
     marginBottom: 4,
   },
   userEmail: {
     fontSize: 14,
     color: "#64748b",
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  userType: {
-    fontSize: 14,
-    color: "#3b82f6",
+  userTypeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#eff6ff",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    marginBottom: 16,
+  },
+  userTypeText: {
+    fontSize: 13,
     fontWeight: "500",
+    color: "#3b82f6",
+  },
+  editProfileButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  editProfileButtonText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#3b82f6",
   },
   section: {
-    marginTop: 16,
+    marginTop: 20,
     paddingHorizontal: 16,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#374151",
-    marginBottom: 12,
-    marginLeft: 8,
-  },
-  // Medication Logs Button Styles
-  logsButton: {
-    backgroundColor: "white",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    overflow: "hidden",
-    marginBottom: 8,
-  },
-  logsButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    gap: 16,
-  },
-  logsIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#eff6ff",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  logsTextContainer: {
-    flex: 1,
-  },
-  logsTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#0f172a",
-    marginBottom: 4,
-  },
-  logsSubtitle: {
-    fontSize: 13,
-    color: "#64748b",
-  },
-  infoCard: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  infoRow: {
-    paddingVertical: 12,
-  },
-  infoLabel: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#64748b",
-    marginBottom: 6,
-  },
-  infoValue: {
-    fontSize: 16,
-    color: "#0f172a",
-  },
-  notesText: {
-    lineHeight: 22,
     color: "#475569",
   },
-  divider: {
-    height: 1,
-    backgroundColor: "#f1f5f9",
-  },
-  listContainer: {
-    marginTop: 4,
-  },
-  listItem: {
-    marginBottom: 4,
-  },
-  listItemText: {
-    fontSize: 16,
-    color: "#0f172a",
-    lineHeight: 22,
-  },
-  actionButton: {
+  navButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "white",
     borderRadius: 12,
     padding: 16,
-    marginBottom: 12,
     borderWidth: 1,
     borderColor: "#e2e8f0",
   },
-  actionButtonContent: {
+  navButtonLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    flex: 1,
+  },
+  navButtonIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#eff6ff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  navButtonTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0f172a",
+    marginBottom: 2,
+  },
+  navButtonSubtitle: {
+    fontSize: 13,
+    color: "#64748b",
+  },
+  settingItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "white",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  settingItemLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
-  actionButtonText: {
-    fontSize: 16,
+  settingItemText: {
+    fontSize: 15,
     color: "#0f172a",
   },
-  logoutSection: {
-    marginTop: 32,
-    marginBottom: 32,
-    alignItems: "center",
-  },
   logoutButton: {
-    backgroundColor: "white",
-    borderWidth: 1,
-    borderColor: "#fee2e2",
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    width: "90%",
-    marginBottom: 24,
-  },
-  logoutButtonContent: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
+    gap: 10,
+    backgroundColor: "white",
+    marginTop: 24,
+    marginHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#fee2e2",
   },
   logoutButtonText: {
     fontSize: 16,
     fontWeight: "600",
     color: "#ef4444",
   },
+  footer: {
+    alignItems: "center",
+    paddingVertical: 24,
+  },
   versionText: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#94a3b8",
-    textAlign: "center",
-    marginBottom: 8,
+    marginBottom: 4,
   },
   dataNotice: {
-    fontSize: 12,
-    color: "#64748b",
-    textAlign: "center",
+    fontSize: 11,
+    color: "#cbd5e1",
   },
 });

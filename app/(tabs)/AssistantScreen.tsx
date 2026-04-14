@@ -267,6 +267,10 @@ export default function AssistantScreen() {
   // ── Render message ────────────────────────────────────────────────────────────
   const renderMessage = (message: Message) => {
     const isUser = message.sender === "user";
+    const safeData = Array.isArray(message.data) ? message.data : [];
+    const safeInteractions = Array.isArray(message.data?.interactions)
+      ? message.data.interactions
+      : [];
 
     return (
       <View
@@ -297,7 +301,7 @@ export default function AssistantScreen() {
           {/* Medication list */}
           {message.type === "medication" && message.data && (
             <View style={styles.messageData}>
-              {message.data.map((med: any, index: number) => (
+              {safeData.map((med: any, index: number) => (
                 <View key={index} style={styles.medicationItem}>
                   <View style={styles.medicationInfo}>
                     <Text style={styles.medicationName}>{med.name}</Text>
@@ -354,38 +358,36 @@ export default function AssistantScreen() {
           {message.type === "health" && message.data && (
             <View style={styles.messageData}>
               {message.data.interactions
-                ? message.data.interactions.map(
-                    (interaction: any, index: number) => (
-                      <View key={index} style={styles.interactionItem}>
-                        <View style={styles.interactionHeader}>
-                          <Text style={styles.interactionMeds}>
-                            {interaction.meds.join(" + ")}
-                          </Text>
-                          <View
-                            style={[
-                              styles.severityBadge,
-                              {
-                                backgroundColor:
-                                  interaction.severity === "severe"
-                                    ? Colors.error
-                                    : interaction.severity === "moderate"
-                                      ? Colors.warning
-                                      : Colors.success,
-                              },
-                            ]}
-                          >
-                            <Text style={styles.severityText}>
-                              {interaction.severity}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.interactionAdvice}>
-                          {interaction.advice}
+                ? safeInteractions.map((interaction: any, index: number) => (
+                    <View key={index} style={styles.interactionItem}>
+                      <View style={styles.interactionHeader}>
+                        <Text style={styles.interactionMeds}>
+                          {interaction.meds.join(" + ")}
                         </Text>
+                        <View
+                          style={[
+                            styles.severityBadge,
+                            {
+                              backgroundColor:
+                                interaction.severity === "severe"
+                                  ? Colors.error
+                                  : interaction.severity === "moderate"
+                                    ? Colors.warning
+                                    : Colors.success,
+                            },
+                          ]}
+                        >
+                          <Text style={styles.severityText}>
+                            {interaction.severity}
+                          </Text>
+                        </View>
                       </View>
-                    ),
-                  )
-                : message.data.map((metric: HealthMetric, index: number) => (
+                      <Text style={styles.interactionAdvice}>
+                        {interaction.advice}
+                      </Text>
+                    </View>
+                  ))
+                : safeData.map((metric: HealthMetric, index: number) => (
                     <View key={index} style={styles.metricItem}>
                       <Text style={styles.metricType}>{metric.type}</Text>
                       <View style={styles.metricValueContainer}>
@@ -420,7 +422,7 @@ export default function AssistantScreen() {
           {message.type === "suggestion" && message.data && (
             <View style={styles.messageData}>
               {Array.isArray(message.data) ? (
-                message.data.map((tip: string, index: number) => (
+                safeData.map((tip: string, index: number) => (
                   <View key={index} style={styles.tipItem}>
                     <Text style={styles.tipText}>{tip}</Text>
                   </View>

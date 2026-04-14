@@ -1,4 +1,4 @@
-// app/(tabs)/_layout.tsx - 5 TABS ONLY (NO CAREGIVER TAB)
+// app/(tabs)/_layout.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React from "react";
@@ -6,13 +6,10 @@ import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HapticTab } from "@/components/haptic-tab";
-import { Colors } from "@/constants/theme";
+import Colors from "@/constants/colors"; // ← Change this path to your colors file
 import { SelectedPatientProvider } from "@/contexts/SelectedPatientContext";
-import { useColorScheme } from "@/hooks/use-color-scheme";
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-  const tint = Colors[colorScheme ?? "light"].tint;
   const insets = useSafeAreaInsets();
 
   return (
@@ -21,7 +18,7 @@ export default function TabLayout() {
         screenOptions={{
           headerShown: false,
           tabBarShowLabel: false,
-          tabBarActiveTintColor: tint,
+          tabBarActiveTintColor: Colors.primary, // Now this will work
           tabBarInactiveTintColor: "#999",
           tabBarButton: HapticTab,
           tabBarStyle: [styles.tabBar, { bottom: insets.bottom + 5 }],
@@ -45,15 +42,6 @@ export default function TabLayout() {
             ),
           }}
         />
-        {/* 
-        <Tabs.Screen
-          name="ScanScreen"
-          options={{
-            tabBarIcon: ({ color }) => (
-              <Ionicons name="scan-outline" size={22} color={color} />
-            ),
-          }}
-        /> */}
 
         <Tabs.Screen
           name="AssistantScreen"

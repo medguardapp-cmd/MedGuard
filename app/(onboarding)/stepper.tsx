@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
   Alert,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,14 @@ import {
   View,
 } from "react-native";
 import { useOnboarding } from "../../contexts/OnboardingContext";
+
+// Add this right after imports, before export default function
+const GENDERS = [
+  { id: "male", label: "Male" },
+  { id: "female", label: "Female" },
+  { id: "other", label: "Other" },
+  { id: "prefer-not-to-say", label: "Prefer not to say" },
+];
 
 export default function OnboardingStepper() {
   const router = useRouter();
@@ -30,6 +39,69 @@ export default function OnboardingStepper() {
   const [newCondition, setNewCondition] = useState("");
   const [newAllergy, setNewAllergy] = useState("");
   const [newMedication, setNewMedication] = useState("");
+
+  const [newConditionMedical, setNewConditionMedical] = useState("");
+  const [newAllergyMedical, setNewAllergyMedical] = useState("");
+  const [newDrugAllergyMedical, setNewDrugAllergyMedical] = useState("");
+
+  const [customGender, setCustomGender] = useState(
+    data.userData.gender && !GENDERS.find((g) => g.id === data.userData.gender)
+      ? data.userData.gender
+      : "",
+  );
+
+  const [showCustomGender, setShowCustomGender] = useState(
+    data.userData.gender === "other" ||
+      (data.userData.gender &&
+        !GENDERS.find((g) => g.id === data.userData.gender)),
+  );
+
+  // Generate years (1900 to current year)
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1900 + 1 }, (_, i) =>
+    (currentYear - i).toString(),
+  );
+
+  // Months
+  const months = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
+  // Days (1-31)
+  const days = Array.from({ length: 31 }, (_, i) => (i + 1).toString());
+  // Add these with the other useState declarations
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showDayPicker, setShowDayPicker] = useState(false);
+  const [showYearPicker, setShowYearPicker] = useState(false);
+  // Parse existing date if available
+  const parseDate = () => {
+    if (data.userData.dateOfBirth && data.userData.dateOfBirth.includes("-")) {
+      const [year, month, day] = data.userData.dateOfBirth.split("-");
+      return {
+        year: year || "",
+        month: month ? parseInt(month) - 1 : -1,
+        day: day ? parseInt(day) : -1,
+      };
+    }
+    return { year: "", month: -1, day: -1 };
+  };
+
+  const {
+    year: selectedYear,
+    month: selectedMonth,
+    day: selectedDay,
+  } = parseDate();
 
   // ✅ Calculate total steps based on user type
   const getTotalSteps = () => {
@@ -57,6 +129,46 @@ export default function OnboardingStepper() {
 
     const fullName = `${firstName} ${lastName}`.trim();
     updateUserData({ name: fullName });
+  };
+
+  const handleDateChange = (year: string, month: number, day: number) => {
+    if (year && month !== -1 && day !== -1) {
+      const monthNum = (month + 1).toString().padStart(2, "0");
+      const dayNum = day.toString().padStart(2, "0");
+      updateUserData({ dateOfBirth: `${year}-${monthNum}-${dayNum}` });
+    }
+  };
+
+  const handleGenderSelect = (genderId: string) => {
+    if (genderId === "other") {
+      setShowCustomGender(true);
+      updateUserData({ gender: "other" });
+      setCustomGender("");
+    } else {
+      setShowCustomGender(false);
+      updateUserData({ gender: genderId });
+      setCustomGender("");
+    }
+  };
+
+  const handleCustomGenderChange = (text: string) => {
+    setCustomGender(text);
+    updateUserData({ gender: text });
+  };
+
+  // Auto-capitalize first letter of each word
+  const capitalizeName = (text: string) => {
+    return text.replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const handleFirstNameChange = (text: string) => {
+    const capitalized = capitalizeName(text);
+    handleNameChange("first", capitalized);
+  };
+
+  const handleLastNameChange = (text: string) => {
+    const capitalized = capitalizeName(text);
+    handleNameChange("last", capitalized);
   };
 
   const handleComplete = async () => {
@@ -217,30 +329,11 @@ export default function OnboardingStepper() {
   );
 
   // Step 2: Personal Info (same for both)
+  // app/(onboarding)/stepper.tsx - Updated renderStep2 without phone number
+
+  // app/(onboarding)/stepper.tsx - Updated renderStep2 with name capitalization, birthday pickers, and custom gender
+
   const renderStep2 = () => {
-    const genders = [
-      { id: "male", label: "Male" },
-      { id: "female", label: "Female" },
-      { id: "other", label: "Other" },
-      { id: "prefer-not-to-say", label: "Prefer not to say" },
-    ];
-
-    const formatDateInput = (text: string) => {
-      const digits = text.replace(/\D/g, "");
-      if (digits.length <= 4) {
-        return digits;
-      } else if (digits.length <= 6) {
-        return `${digits.slice(0, 4)}-${digits.slice(4)}`;
-      } else {
-        return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-      }
-    };
-
-    const handleDateChange = (text: string) => {
-      const formatted = formatDateInput(text);
-      updateUserData({ dateOfBirth: formatted });
-    };
-
     return (
       <ScrollView
         style={styles.stepContent}
@@ -258,7 +351,7 @@ export default function OnboardingStepper() {
               style={styles.input}
               placeholder="Enter your first name"
               value={getFirstName()}
-              onChangeText={(text) => handleNameChange("first", text)}
+              onChangeText={handleFirstNameChange}
               autoCapitalize="words"
             />
           </View>
@@ -269,37 +362,80 @@ export default function OnboardingStepper() {
               style={styles.input}
               placeholder="Enter your last name"
               value={getLastName()}
-              onChangeText={(text) => handleNameChange("last", text)}
+              onChangeText={handleLastNameChange}
               autoCapitalize="words"
             />
           </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Date of Birth *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
-              value={data.userData.dateOfBirth}
-              onChangeText={handleDateChange}
-              keyboardType="number-pad"
-              maxLength={10}
-            />
-            <Text style={styles.helperText}>
-              Format: Year-Month-Day (e.g., 1990-01-15)
-            </Text>
+            <View style={styles.datePickerContainer}>
+              {/* Month Dropdown */}
+              <View style={styles.datePickerColumn}>
+                <Text style={styles.datePickerLabel}>Month</Text>
+                <TouchableOpacity
+                  style={styles.dropdownButton}
+                  onPress={() => setShowMonthPicker(true)}
+                >
+                  <Text style={styles.dropdownButtonText} numberOfLines={1}>
+                    {data.userData.dateOfBirth &&
+                    data.userData.dateOfBirth.split("-")[1]
+                      ? months[
+                          parseInt(data.userData.dateOfBirth.split("-")[1]) - 1
+                        ].substring(0, 3)
+                      : "Month"}
+                  </Text>
+                  <Text style={styles.dropdownArrow}>▼</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Day Dropdown */}
+              <View style={styles.datePickerColumn}>
+                <Text style={styles.datePickerLabel}>Day</Text>
+                <TouchableOpacity
+                  style={styles.dropdownButton}
+                  onPress={() => setShowDayPicker(true)}
+                >
+                  <Text style={styles.dropdownButtonText}>
+                    {data.userData.dateOfBirth &&
+                    data.userData.dateOfBirth.split("-")[2]
+                      ? parseInt(data.userData.dateOfBirth.split("-")[2])
+                      : "Day"}
+                  </Text>
+                  <Text style={styles.dropdownArrow}>▼</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Year Dropdown */}
+              <View style={styles.datePickerColumn}>
+                <Text style={styles.datePickerLabel}>Year</Text>
+                <TouchableOpacity
+                  style={styles.dropdownButton}
+                  onPress={() => setShowYearPicker(true)}
+                >
+                  <Text style={styles.dropdownButtonText}>
+                    {data.userData.dateOfBirth &&
+                    data.userData.dateOfBirth.split("-")[0]
+                      ? data.userData.dateOfBirth.split("-")[0]
+                      : "Year"}
+                  </Text>
+                  <Text style={styles.dropdownArrow}>▼</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Gender *</Text>
             <View style={styles.genderOptions}>
-              {genders.map((gender) => (
+              {GENDERS.map((gender) => (
                 <TouchableOpacity
                   key={gender.id}
                   style={[
                     styles.genderOption,
                     data.userData.gender === gender.id && styles.genderSelected,
                   ]}
-                  onPress={() => updateUserData({ gender: gender.id })}
+                  onPress={() => handleGenderSelect(gender.id)}
                 >
                   <Text
                     style={[
@@ -313,45 +449,17 @@ export default function OnboardingStepper() {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contact Information 🇵🇭</Text>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Mobile Number</Text>
-              <View style={styles.phoneInputContainer}>
-                <View style={styles.countryCode}>
-                  <Text style={styles.countryCodeText}>+63</Text>
-                </View>
-                <TextInput
-                  style={[styles.input, styles.phoneInput]}
-                  placeholder="912 345 6789"
-                  value={data.userData.contactInfo?.phone || ""}
-                  onChangeText={(text) => {
-                    const digits = text.replace(/\D/g, "").slice(0, 10);
-                    let formatted = "";
-                    if (digits.length > 0) formatted = digits;
-                    if (digits.length > 3)
-                      formatted = `${digits.slice(0, 3)} ${digits.slice(3)}`;
-                    if (digits.length > 6)
-                      formatted = `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
-
-                    updateUserData({
-                      contactInfo: {
-                        ...data.userData.contactInfo,
-                        phone: formatted,
-                      },
-                    });
-                  }}
-                  keyboardType="phone-pad"
-                  maxLength={12}
-                />
-              </View>
-              <Text style={styles.helperText}>
-                Philippines mobile number (e.g., 912 345 6789)
-              </Text>
-            </View>
+            {/* Custom Gender Input */}
+            {showCustomGender && (
+              <TextInput
+                style={[styles.input, styles.customGenderInput]}
+                placeholder="Please specify your gender"
+                value={customGender}
+                onChangeText={handleCustomGenderChange}
+                autoCapitalize="words"
+              />
+            )}
           </View>
 
           <View style={styles.noteBox}>
@@ -360,11 +468,184 @@ export default function OnboardingStepper() {
             </Text>
           </View>
         </View>
+
+        {/* Modals - Move these outside the form but inside ScrollView */}
+        {/* Month Picker Modal */}
+        {/* Month Picker Modal */}
+        {/* Month Picker Modal */}
+        <Modal
+          visible={showMonthPicker}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowMonthPicker(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowMonthPicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Month</Text>
+              <ScrollView>
+                {months.map((month, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.modalOption}
+                    onPress={() => {
+                      // Get current year and day from existing date or use defaults
+                      const currentYear =
+                        data.userData.dateOfBirth?.split("-")[0] || "";
+                      const currentDay =
+                        data.userData.dateOfBirth?.split("-")[2] || "1";
+                      const monthNum = (index + 1).toString().padStart(2, "0");
+                      const dayNum = currentDay.toString().padStart(2, "0");
+                      updateUserData({
+                        dateOfBirth: `${currentYear}-${monthNum}-${dayNum}`,
+                      });
+                      setShowMonthPicker(false);
+                    }}
+                  >
+                    <Text style={styles.modalOptionText}>{month}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Day Picker Modal */}
+        <Modal visible={showDayPicker} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowDayPicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Day</Text>
+              <ScrollView>
+                {days.map((day) => (
+                  <TouchableOpacity
+                    key={day}
+                    style={styles.modalOption}
+                    onPress={() => {
+                      const currentYear =
+                        data.userData.dateOfBirth?.split("-")[0] || "";
+                      const currentMonth =
+                        data.userData.dateOfBirth?.split("-")[1] || "01";
+                      const dayNum = day.toString().padStart(2, "0");
+                      updateUserData({
+                        dateOfBirth: `${currentYear}-${currentMonth}-${dayNum}`,
+                      });
+                      setShowDayPicker(false);
+                    }}
+                  >
+                    <Text style={styles.modalOptionText}>{day}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Year Picker Modal */}
+        <Modal visible={showYearPicker} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowYearPicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Year</Text>
+              <ScrollView>
+                {years.map((year) => (
+                  <TouchableOpacity
+                    key={year}
+                    style={styles.modalOption}
+                    onPress={() => {
+                      const currentMonth =
+                        data.userData.dateOfBirth?.split("-")[1] || "01";
+                      const currentDay =
+                        data.userData.dateOfBirth?.split("-")[2] || "01";
+                      updateUserData({
+                        dateOfBirth: `${year}-${currentMonth}-${currentDay}`,
+                      });
+                      setShowYearPicker(false);
+                    }}
+                  >
+                    <Text style={styles.modalOptionText}>{year}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Day Picker Modal */}
+        <Modal visible={showDayPicker} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowDayPicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Day</Text>
+              <ScrollView>
+                {days.map((day) => (
+                  <TouchableOpacity
+                    key={day}
+                    style={styles.modalOption}
+                    onPress={() => {
+                      handleDateChange(
+                        selectedYear,
+                        selectedMonth,
+                        parseInt(day),
+                      );
+                      setShowDayPicker(false);
+                    }}
+                  >
+                    <Text style={styles.modalOptionText}>{day}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Year Picker Modal */}
+        <Modal visible={showYearPicker} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowYearPicker(false)}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Year</Text>
+              <ScrollView>
+                {years.map((year) => (
+                  <TouchableOpacity
+                    key={year}
+                    style={styles.modalOption}
+                    onPress={() => {
+                      handleDateChange(year, selectedMonth, selectedDay);
+                      setShowYearPicker(false);
+                    }}
+                  >
+                    <Text style={styles.modalOptionText}>{year}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </ScrollView>
     );
   };
 
   // Step 3: Medical Info (ONLY for patients)
+  // app/(onboarding)/stepper.tsx - UPDATED with complete medical info
+  // Replace your renderStep3Medical function with this:
+
+  // Step 3: Medical Info (ONLY for patients) - UPDATED with all fields
   const renderStep3Medical = () => {
     const bloodTypes = [
       "A+",
@@ -378,17 +659,21 @@ export default function OnboardingStepper() {
       "Unknown",
     ];
 
+    // Check if user is female
+    const isFemale = data.userData.gender?.toLowerCase() === "female";
+
     const addCondition = () => {
       if (
-        newCondition.trim() &&
-        !data.medicalData.conditions.includes(newCondition.trim())
+        newConditionMedical.trim() &&
+        !data.medicalData.conditions.includes(newConditionMedical.trim())
       ) {
-        const updatedConditions = [
-          ...data.medicalData.conditions,
-          newCondition.trim(),
-        ];
-        updateMedicalData({ conditions: updatedConditions });
-        setNewCondition("");
+        updateMedicalData({
+          conditions: [
+            ...data.medicalData.conditions,
+            newConditionMedical.trim(),
+          ],
+        });
+        setNewConditionMedical("");
       }
     };
 
@@ -400,15 +685,13 @@ export default function OnboardingStepper() {
 
     const addAllergy = () => {
       if (
-        newAllergy.trim() &&
-        !data.medicalData.allergies.includes(newAllergy.trim())
+        newAllergyMedical.trim() &&
+        !data.medicalData.allergies.includes(newAllergyMedical.trim())
       ) {
-        const updatedAllergies = [
-          ...data.medicalData.allergies,
-          newAllergy.trim(),
-        ];
-        updateMedicalData({ allergies: updatedAllergies });
-        setNewAllergy("");
+        updateMedicalData({
+          allergies: [...data.medicalData.allergies, newAllergyMedical.trim()],
+        });
+        setNewAllergyMedical("");
       }
     };
 
@@ -418,26 +701,26 @@ export default function OnboardingStepper() {
       updateMedicalData({ allergies: updated });
     };
 
-    const addMedication = () => {
+    const addDrugAllergy = () => {
       if (
-        newMedication.trim() &&
-        !data.medicalData.medications.includes(newMedication.trim())
+        newDrugAllergyMedical.trim() &&
+        !data.medicalData.drugAllergies?.includes(newDrugAllergyMedical.trim())
       ) {
-        const updatedMedications = [
-          ...data.medicalData.medications,
-          newMedication.trim(),
-        ];
-        updateMedicalData({ medications: updatedMedications });
-        setNewMedication("");
+        updateMedicalData({
+          drugAllergies: [
+            ...(data.medicalData.drugAllergies || []),
+            newDrugAllergyMedical.trim(),
+          ],
+        });
+        setNewDrugAllergyMedical("");
       }
     };
 
-    const removeMedication = (index: number) => {
-      const updated = [...data.medicalData.medications];
+    const removeDrugAllergy = (index: number) => {
+      const updated = [...(data.medicalData.drugAllergies || [])];
       updated.splice(index, 1);
-      updateMedicalData({ medications: updated });
+      updateMedicalData({ drugAllergies: updated });
     };
-
     return (
       <ScrollView
         style={styles.stepContent}
@@ -449,128 +732,9 @@ export default function OnboardingStepper() {
         </Text>
 
         <View style={styles.form}>
+          {/* Basic Vitals */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Medical Conditions</Text>
-            <Text style={styles.sectionDescription}>
-              List any chronic or ongoing medical conditions
-            </Text>
-
-            <View style={styles.inputWithButton}>
-              <TextInput
-                style={[styles.input, styles.flexInput]}
-                placeholder="e.g., Diabetes, Hypertension"
-                value={newCondition}
-                onChangeText={setNewCondition}
-                onSubmitEditing={addCondition}
-              />
-              <TouchableOpacity
-                style={styles.addButton}
-                onPress={addCondition}
-                disabled={!newCondition.trim()}
-              >
-                <Text style={styles.addButtonText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-
-            {data.medicalData.conditions.length > 0 && (
-              <View style={styles.listContainer}>
-                {data.medicalData.conditions.map((condition, index) => (
-                  <View key={index} style={styles.listItem}>
-                    <Text style={styles.listItemText}>{condition}</Text>
-                    <TouchableOpacity
-                      onPress={() => removeCondition(index)}
-                      style={styles.removeButton}
-                    >
-                      <Text style={styles.removeButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Allergies</Text>
-            <Text style={styles.sectionDescription}>
-              List any allergies (medications, food, environmental)
-            </Text>
-
-            <View style={styles.inputWithButton}>
-              <TextInput
-                style={[styles.input, styles.flexInput]}
-                placeholder="e.g., Penicillin, Peanuts"
-                value={newAllergy}
-                onChangeText={setNewAllergy}
-                onSubmitEditing={addAllergy}
-              />
-              <TouchableOpacity
-                style={styles.addButton}
-                onPress={addAllergy}
-                disabled={!newAllergy.trim()}
-              >
-                <Text style={styles.addButtonText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-
-            {data.medicalData.allergies.length > 0 && (
-              <View style={styles.listContainer}>
-                {data.medicalData.allergies.map((allergy, index) => (
-                  <View key={index} style={styles.listItem}>
-                    <Text style={styles.listItemText}>{allergy}</Text>
-                    <TouchableOpacity
-                      onPress={() => removeAllergy(index)}
-                      style={styles.removeButton}
-                    >
-                      <Text style={styles.removeButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Current Medications</Text>
-            <Text style={styles.sectionDescription}>
-              List medications you're currently taking
-            </Text>
-
-            <View style={styles.inputWithButton}>
-              <TextInput
-                style={[styles.input, styles.flexInput]}
-                placeholder="e.g., Metformin 500mg, Lisinopril 10mg"
-                value={newMedication}
-                onChangeText={setNewMedication}
-                onSubmitEditing={addMedication}
-              />
-              <TouchableOpacity
-                style={styles.addButton}
-                onPress={addMedication}
-                disabled={!newMedication.trim()}
-              >
-                <Text style={styles.addButtonText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-
-            {data.medicalData.medications.length > 0 && (
-              <View style={styles.listContainer}>
-                {data.medicalData.medications.map((medication, index) => (
-                  <View key={index} style={styles.listItem}>
-                    <Text style={styles.listItemText}>{medication}</Text>
-                    <TouchableOpacity
-                      onPress={() => removeMedication(index)}
-                      style={styles.removeButton}
-                    >
-                      <Text style={styles.removeButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Vital Information</Text>
+            <Text style={styles.sectionTitle}>Basic Vitals</Text>
 
             <View style={styles.row}>
               <View style={styles.halfInput}>
@@ -606,7 +770,7 @@ export default function OnboardingStepper() {
                 <Text style={styles.label}>Height (cm)</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="175"
+                  placeholder="e.g., 165"
                   value={data.medicalData.height}
                   onChangeText={(text) => updateMedicalData({ height: text })}
                   keyboardType="numeric"
@@ -617,7 +781,7 @@ export default function OnboardingStepper() {
                 <Text style={styles.label}>Weight (kg)</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="70"
+                  placeholder="e.g., 65"
                   value={data.medicalData.weight}
                   onChangeText={(text) => updateMedicalData({ weight: text })}
                   keyboardType="numeric"
@@ -626,15 +790,393 @@ export default function OnboardingStepper() {
             </View>
           </View>
 
+          {/* Drug Allergies (must-have for reactions feature) */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Additional Notes</Text>
+            <Text style={styles.sectionTitle}>Drug Allergies ⚠️</Text>
             <Text style={styles.sectionDescription}>
-              Any other important medical information
+              List any medication allergies (important for medication safety)
             </Text>
 
+            <View style={styles.inputWithButton}>
+              <TextInput
+                style={[styles.input, styles.flexInput]}
+                placeholder="e.g., Penicillin, Sulfa, Ibuprofen"
+                value={newDrugAllergyMedical}
+                onChangeText={setNewDrugAllergyMedical}
+                onSubmitEditing={addDrugAllergy}
+              />
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={addDrugAllergy}
+                disabled={!newDrugAllergyMedical.trim()}
+              >
+                <Text style={styles.addButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            {(data.medicalData.drugAllergies || []).length > 0 && (
+              <View style={styles.listContainer}>
+                {(data.medicalData.drugAllergies || []).map(
+                  (allergy, index) => (
+                    <View key={index} style={styles.listItem}>
+                      <Text style={styles.listItemText}>⚠️ {allergy}</Text>
+                      <TouchableOpacity
+                        onPress={() => removeDrugAllergy(index)}
+                        style={styles.removeButton}
+                      >
+                        <Text style={styles.removeButtonText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ),
+                )}
+              </View>
+            )}
+          </View>
+
+          {/* Other Allergies */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Other Allergies</Text>
+            <Text style={styles.sectionDescription}>
+              List food, environmental, or other allergies
+            </Text>
+
+            <View style={styles.inputWithButton}>
+              <TextInput
+                style={[styles.input, styles.flexInput]}
+                placeholder="e.g., Peanuts, Pollen, Latex"
+                value={newAllergyMedical}
+                onChangeText={setNewAllergyMedical}
+                onSubmitEditing={addAllergy}
+              />
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={addAllergy}
+                disabled={!newAllergy.trim()}
+              >
+                <Text style={styles.addButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            {data.medicalData.allergies.length > 0 && (
+              <View style={styles.listContainer}>
+                {data.medicalData.allergies.map((allergy, index) => (
+                  <View key={index} style={styles.listItem}>
+                    <Text style={styles.listItemText}>• {allergy}</Text>
+                    <TouchableOpacity
+                      onPress={() => removeAllergy(index)}
+                      style={styles.removeButton}
+                    >
+                      <Text style={styles.removeButtonText}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Medical Conditions */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Medical Conditions</Text>
+            <Text style={styles.sectionDescription}>
+              List any chronic or ongoing medical conditions
+            </Text>
+
+            <View style={styles.inputWithButton}>
+              <TextInput
+                style={[styles.input, styles.flexInput]}
+                placeholder="e.g., Diabetes, Asthma, Hypertension"
+                value={newConditionMedical}
+                onChangeText={setNewConditionMedical}
+                onSubmitEditing={addCondition}
+              />
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={addCondition}
+                disabled={!newCondition.trim()}
+              >
+                <Text style={styles.addButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            {data.medicalData.conditions.length > 0 && (
+              <View style={styles.listContainer}>
+                {data.medicalData.conditions.map((condition, index) => (
+                  <View key={index} style={styles.listItem}>
+                    <Text style={styles.listItemText}>• {condition}</Text>
+                    <TouchableOpacity
+                      onPress={() => removeCondition(index)}
+                      style={styles.removeButton}
+                    >
+                      <Text style={styles.removeButtonText}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Pregnancy/Breastfeeding (only for females) */}
+          {isFemale && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Pregnancy & Breastfeeding</Text>
+
+              <View style={styles.row}>
+                <View style={styles.halfInput}>
+                  <Text style={styles.label}>Pregnant</Text>
+                  <View style={styles.toggleContainer}>
+                    <TouchableOpacity
+                      style={[
+                        styles.toggleOption,
+                        data.medicalData.isPregnant === true &&
+                          styles.toggleActive,
+                      ]}
+                      onPress={() => updateMedicalData({ isPregnant: true })}
+                    >
+                      <Text
+                        style={[
+                          styles.toggleText,
+                          data.medicalData.isPregnant === true &&
+                            styles.toggleTextActive,
+                        ]}
+                      >
+                        Yes
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.toggleOption,
+                        data.medicalData.isPregnant === false &&
+                          styles.toggleActive,
+                      ]}
+                      onPress={() => updateMedicalData({ isPregnant: false })}
+                    >
+                      <Text
+                        style={[
+                          styles.toggleText,
+                          data.medicalData.isPregnant === false &&
+                            styles.toggleTextActive,
+                        ]}
+                      >
+                        No
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.halfInput}>
+                  <Text style={styles.label}>Breastfeeding</Text>
+                  <View style={styles.toggleContainer}>
+                    <TouchableOpacity
+                      style={[
+                        styles.toggleOption,
+                        data.medicalData.isBreastfeeding === true &&
+                          styles.toggleActive,
+                      ]}
+                      onPress={() =>
+                        updateMedicalData({ isBreastfeeding: true })
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.toggleText,
+                          data.medicalData.isBreastfeeding === true &&
+                            styles.toggleTextActive,
+                        ]}
+                      >
+                        Yes
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.toggleOption,
+                        data.medicalData.isBreastfeeding === false &&
+                          styles.toggleActive,
+                      ]}
+                      onPress={() =>
+                        updateMedicalData({ isBreastfeeding: false })
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.toggleText,
+                          data.medicalData.isBreastfeeding === false &&
+                            styles.toggleTextActive,
+                        ]}
+                      >
+                        No
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              {data.medicalData.isPregnant && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Due Date</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="YYYY-MM-DD"
+                    value={data.medicalData.dueDate || ""}
+                    onChangeText={(text) =>
+                      updateMedicalData({ dueDate: text })
+                    }
+                  />
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Pregnancy Notes (optional)"
+                    value={data.medicalData.pregnancyNotes || ""}
+                    onChangeText={(text) =>
+                      updateMedicalData({ pregnancyNotes: text })
+                    }
+                    multiline
+                    numberOfLines={2}
+                  />
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Lifestyle Section - IMPROVED UI */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Lifestyle</Text>
+            <Text style={styles.sectionDescription}>
+              Tell us about your lifestyle habits
+            </Text>
+
+            {/* Smoking Status */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Smoking Status</Text>
+              <View style={styles.optionsGrid}>
+                {["Never smoked", "Former smoker", "Current smoker"].map(
+                  (option) => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[
+                        styles.optionChip,
+                        data.medicalData.smokingStatus === option &&
+                          styles.optionChipActive,
+                      ]}
+                      onPress={() =>
+                        updateMedicalData({ smokingStatus: option })
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.optionChipText,
+                          data.medicalData.smokingStatus === option &&
+                            styles.optionChipTextActive,
+                        ]}
+                      >
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  ),
+                )}
+              </View>
+            </View>
+
+            {/* Alcohol Consumption */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Alcohol Consumption</Text>
+              <View style={styles.optionsGrid}>
+                {["Never", "Occasionally", "Moderately", "Regularly"].map(
+                  (option) => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[
+                        styles.optionChip,
+                        data.medicalData.alcoholConsumption === option &&
+                          styles.optionChipActive,
+                      ]}
+                      onPress={() =>
+                        updateMedicalData({ alcoholConsumption: option })
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.optionChipText,
+                          data.medicalData.alcoholConsumption === option &&
+                            styles.optionChipTextActive,
+                        ]}
+                      >
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  ),
+                )}
+              </View>
+            </View>
+
+            {/* Exercise Frequency */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Exercise Frequency</Text>
+              <View style={styles.optionsGrid}>
+                {[
+                  "Sedentary",
+                  "1-2 times/week",
+                  "3-4 times/week",
+                  "5+ times/week",
+                ].map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={[
+                      styles.optionChip,
+                      data.medicalData.exerciseFrequency === option &&
+                        styles.optionChipActive,
+                    ]}
+                    onPress={() =>
+                      updateMedicalData({ exerciseFrequency: option })
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.optionChipText,
+                        data.medicalData.exerciseFrequency === option &&
+                          styles.optionChipTextActive,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Dietary Preferences */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Dietary Preferences</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g., Vegetarian, Vegan, Low-sodium, Gluten-free"
+                value={data.medicalData.dietaryPreferences || ""}
+                onChangeText={(text) =>
+                  updateMedicalData({ dietaryPreferences: text })
+                }
+              />
+            </View>
+
+            {/* Lifestyle Notes */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Lifestyle Notes</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                placeholder="Any additional lifestyle information"
+                value={data.medicalData.lifestyleNotes || ""}
+                onChangeText={(text) =>
+                  updateMedicalData({ lifestyleNotes: text })
+                }
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+          </View>
+
+          {/* Additional Notes */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Additional Medical Notes</Text>
             <TextInput
               style={[styles.input, styles.textArea]}
-              placeholder="e.g., Previous surgeries, family medical history, etc."
+              placeholder="Any other important medical information"
               value={data.medicalData.notes}
               onChangeText={(text) => updateMedicalData({ notes: text })}
               multiline
@@ -1088,6 +1630,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     borderLeftWidth: 4,
+    marginBottom: 50,
     borderLeftColor: "#f59e0b",
   },
   noteText: {
@@ -1355,5 +1898,321 @@ const styles = StyleSheet.create({
     alignItems: "center",
     minHeight: 52,
     justifyContent: "center",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderRadius: 12,
+    width: "80%",
+    maxHeight: "70%",
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  modalOption: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  modalOptionText: {
+    fontSize: 16,
+    color: "#0f172a",
+    textAlign: "center",
+  },
+  // Replace these styles in your StyleSheet
+  datePickerContainer: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 8,
+  },
+  datePickerColumn: {
+    flex: 1,
+  },
+  datePickerLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#64748b",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  dropdownButton: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 50,
+  },
+  dropdownButtonText: {
+    fontSize: 14,
+    color: "#0f172a",
+  },
+  dropdownArrow: {
+    fontSize: 12,
+    color: "#64748b",
+  },
+  medicalSection: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  medicalSectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+    marginBottom: 4,
+  },
+  medicalSectionSubtitle: {
+    fontSize: 14,
+    color: "#64748b",
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  medicalRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 16,
+  },
+  medicalHalfInput: {
+    flex: 1,
+  },
+  tagContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
+  },
+  tag: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f1f5f9",
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 6,
+  },
+  tagText: {
+    fontSize: 14,
+    color: "#334155",
+  },
+  tagRemove: {
+    padding: 2,
+  },
+  addButtonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 12,
+  },
+  addInput: {
+    flex: 1,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 15,
+    color: "#0f172a",
+  },
+  addActionButton: {
+    backgroundColor: "#3b82f6",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+    justifyContent: "center",
+  },
+  addActionButtonText: {
+    color: "white",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  warningCard: {
+    backgroundColor: "#fef2f2",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: "#ef4444",
+  },
+  warningText: {
+    fontSize: 13,
+    color: "#991b1b",
+  },
+  infoCard: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: "#3b82f6",
+  },
+  infoCardText: {
+    fontSize: 13,
+    color: "#1e40af",
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#e2e8f0",
+    marginVertical: 16,
+  },
+  toggleGroup: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 8,
+  },
+  toggleButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    alignItems: "center",
+    backgroundColor: "white",
+  },
+  toggleButtonActive: {
+    backgroundColor: "#3b82f6",
+    borderColor: "#3b82f6",
+  },
+  toggleButtonText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#64748b",
+  },
+  toggleButtonTextActive: {
+    color: "white",
+  },
+  pickerGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  pickerGridOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "white",
+  },
+  pickerGridOptionActive: {
+    backgroundColor: "#3b82f6",
+    borderColor: "#3b82f6",
+  },
+  pickerGridText: {
+    fontSize: 13,
+    color: "#374151",
+  },
+  pickerGridTextActive: {
+    color: "white",
+  },
+  pregnancyCard: {
+    backgroundColor: "#fdf2f8",
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#fbcfe8",
+  },
+  pregnancyTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#be185d",
+    marginBottom: 12,
+  },
+  lifestyleCard: {
+    backgroundColor: "#f0fdf4",
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  lifestyleTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#166534",
+    marginBottom: 12,
+  },
+  bloodTypeGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  bloodTypeGridOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "white",
+  },
+  bloodTypeGridOptionActive: {
+    backgroundColor: "#3b82f6",
+    borderColor: "#3b82f6",
+  },
+  bloodTypeGridText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#374151",
+  },
+  bloodTypeGridTextActive: {
+    color: "white",
+  },
+  vitalCard: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  // Add these styles for the lifestyle options
+  optionsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
+  },
+  optionChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    backgroundColor: "white",
+  },
+  optionChipActive: {
+    backgroundColor: "#3b82f6",
+    borderColor: "#3b82f6",
+  },
+  optionChipText: {
+    fontSize: 14,
+    color: "#374151",
+    fontWeight: "500",
+  },
+  optionChipTextActive: {
+    color: "white",
   },
 });

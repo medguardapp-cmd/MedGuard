@@ -35,6 +35,7 @@ interface OnboardingContextType {
   isCompleted: boolean;
   isLoading: boolean;
   saveCurrentData: () => Promise<void>;
+  clearOnboardingData: () => void; // ← ADDED
 }
 
 const defaultUserData: UserData = {
@@ -52,11 +53,22 @@ const defaultUserData: UserData = {
 const defaultMedicalData: MedicalData = {
   conditions: [],
   allergies: [],
+  drugAllergies: [], // ← ADDED
   medications: [],
   bloodType: "",
   height: "",
   weight: "",
   notes: "",
+  // New fields
+  isPregnant: false,
+  isBreastfeeding: false,
+  dueDate: "",
+  pregnancyNotes: "",
+  smokingStatus: "",
+  alcoholConsumption: "",
+  exerciseFrequency: "",
+  dietaryPreferences: "",
+  lifestyleNotes: "",
 };
 
 const defaultData: OnboardingData = {
@@ -93,47 +105,64 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
   useEffect(() => {
     if (user) {
       loadUserData();
+    } else {
+      // Clear data when no user is logged in
+      clearOnboardingData();
     }
   }, [user]);
 
+  // contexts/OnboardingContext.tsx - Update the loadUserData function
+
+  // contexts/OnboardingContext.tsx - Update the loadUserData function
+
   const loadUserData = async () => {
     try {
-      if (!user) return;
+      if (!user) {
+        console.log("🔴 No user in loadUserData");
+        setIsCompleted(false);
+        setIsLoading(false);
+        return;
+      }
 
+      console.log("🟢 Loading user data for:", user.uid);
       setIsLoading(true);
 
-      // Check if onboarding is already completed in AsyncStorage
-      const onboardingCompleted = await AsyncStorage.getItem(
-        `${ONBOARDING_COMPLETED_KEY}_${user.uid}`,
-      );
+      // Directly fetch from Firestore
+      const userRef = doc(db, "users", user.uid);
+      const userDoc = await getDoc(userRef);
 
-      console.log(
-        "📋 Onboarding status from AsyncStorage:",
-        onboardingCompleted,
-      );
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const onboardingCompleted = userData.onboardingCompleted === true;
 
-      if (onboardingCompleted === "true") {
-        setIsCompleted(true);
-        console.log("✅ Onboarding already completed");
+        console.log("📋 Firestore onboardingCompleted:", onboardingCompleted);
+        console.log("📋 Full userData:", JSON.stringify(userData, null, 2));
 
-        // Try to load data from Firestore, but don't block if it fails
-        try {
+        if (onboardingCompleted) {
+          // Load existing data
           const firestoreData = await getUserData(user.uid);
           if (firestoreData) {
             setData(firestoreData);
-            console.log("📥 Data loaded from Firestore");
           }
-        } catch (firestoreError) {
-          console.warn(
-            "⚠️ Could not load from Firestore, using defaults:",
-            firestoreError,
+          setIsCompleted(true);
+          console.log("✅ Onboarding completed - setting isCompleted to true");
+        } else {
+          // Onboarding not completed
+          console.log(
+            "❌ Onboarding NOT completed - setting isCompleted to false",
           );
+          setIsCompleted(false);
+          setData(defaultData);
         }
       } else {
-        console.log("🔄 Onboarding not completed yet");
+        // New user - no document
+        console.log("🆕 New user - no document found");
+        setIsCompleted(false);
+        setData(defaultData);
       }
     } catch (error) {
       console.error("❌ Error loading user data:", error);
+      setIsCompleted(false);
     } finally {
       setIsLoading(false);
     }
@@ -233,7 +262,7 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
         dateOfBirth: data.userData.dateOfBirth,
         gender: data.userData.gender,
         contactInfo: data.userData.contactInfo,
-        medicalInfo: data.medicalData,
+        medicalData: data.medicalData, // Changed from medicalInfo to medicalData
       });
 
       console.log("✅ User document updated with onboarding data");
@@ -272,6 +301,49 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
     }
   };
 
+  // ============================================
+  // ADD THIS FUNCTION - Clear onboarding data for new user
+  // ============================================
+  const clearOnboardingData = () => {
+    console.log("🗑️ Clearing onboarding data for new user");
+
+    setData({
+      userData: {
+        userType: "patient",
+        name: "",
+        dateOfBirth: "",
+        gender: "",
+        contactInfo: {
+          phone: "",
+          address: "",
+          emergencyContact: "",
+        },
+      },
+      medicalData: {
+        conditions: [],
+        allergies: [],
+        drugAllergies: [],
+        medications: [],
+        bloodType: "",
+        height: "",
+        weight: "",
+        notes: "",
+        isPregnant: false,
+        isBreastfeeding: false,
+        dueDate: "",
+        pregnancyNotes: "",
+        smokingStatus: "",
+        alcoholConsumption: "",
+        exerciseFrequency: "",
+        dietaryPreferences: "",
+        lifestyleNotes: "",
+      },
+    });
+
+    setCurrentStep(0);
+    setIsCompleted(false);
+  };
+
   return (
     <OnboardingContext.Provider
       value={{
@@ -284,6 +356,7 @@ export const OnboardingProvider: React.FC<OnboardingProviderProps> = ({
         isCompleted,
         isLoading,
         saveCurrentData,
+        clearOnboardingData, // ← ADD THIS
       }}
     >
       {children}

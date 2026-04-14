@@ -3,11 +3,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 export default function OnboardingScreen() {
@@ -25,23 +25,17 @@ export default function OnboardingScreen() {
               <Text style={styles.logoIcon}>🛡️</Text>
             </View>
             <Text style={styles.appName}>MedGuard</Text>
-            <Text style={styles.tagline}>Secure Health Management</Text>
+            <Text style={styles.tagline}>
+              Medication Reminder and Health Assistant
+            </Text>
           </View>
 
-          <View style={styles.features}>
-            <View style={styles.featureItem}>
-              <Text style={styles.featureIcon}>🔒</Text>
-              <Text style={styles.featureText}>Secure Medical Records</Text>
-            </View>
-            <View style={styles.featureItem}>
-              <Text style={styles.featureIcon}>📊</Text>
-              <Text style={styles.featureText}>Track Health Metrics</Text>
-            </View>
+          {/* <View style={styles.features}>
             <View style={styles.featureItem}>
               <Text style={styles.featureIcon}>🔔</Text>
               <Text style={styles.featureText}>Medication Reminders</Text>
             </View>
-          </View>
+          </View> */}
 
           <View style={styles.buttonContainer}>
             <TouchableOpacity
@@ -101,7 +95,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   tagline: {
-    fontSize: 16,
+    fontSize: 13,
     color: "rgba(255, 255, 255, 0.8)",
   },
   features: {
@@ -132,18 +126,18 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: "white",
-    padding: 18,
+    padding: 13,
     borderRadius: 12,
     alignItems: "center",
     marginBottom: 16,
   },
   primaryButtonText: {
     color: "#3b82f6",
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: "600",
   },
   secondaryButton: {
-    padding: 16,
+    padding: 13,
     borderRadius: 12,
     alignItems: "center",
     borderWidth: 1,
@@ -151,6 +145,6 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: "white",
-    fontSize: 16,
+    fontSize: 13,
   },
 });

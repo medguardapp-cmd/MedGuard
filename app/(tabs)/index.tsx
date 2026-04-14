@@ -520,6 +520,11 @@ async function updateReminderStatuses(
     await batch.commit();
   }
 }
+const toMinutes = (t: string) => {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+};
+
 // ─────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────
@@ -565,11 +570,6 @@ export default function HomeScreen() {
     useSelectedPatient();
   const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
   const [showPatientSelector, setShowPatientSelector] = useState(false);
-
-  const toMinutes = (t: string) => {
-    const [h, m] = t.split(":").map(Number);
-    return h * 60 + m;
-  };
 
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
@@ -2079,7 +2079,7 @@ const styles = StyleSheet.create({
   },
   dateHeader: { flex: 1 },
   todayText: { fontSize: 26, fontWeight: "800", color: Colors.surface },
-  fullDate: { fontSize: 14, color: Colors.accent, marginTop: 4 },
+  fullDate: { fontSize: 14, color: Colors.primaryLight, marginTop: 4 },
   todayButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -2125,7 +2125,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginBottom: 2,
   },
-  dayNumber: { fontSize: 18, fontWeight: "bold", color: Colors.surface },
+  dayNumber: { fontSize: 18, fontWeight: "600", color: Colors.surface },
   todayDayText: { color: Colors.surface },
   selectedText: { color: Colors.primary },
   reminderDot: { width: 5, height: 5, borderRadius: 3, marginTop: 3 },
@@ -2203,8 +2203,8 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowRadius: 2,
+    elevation: 1,
   },
   medicationItem: {
     flexDirection: "row",
@@ -2294,11 +2294,11 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowRadius: 2,
+    elevation: 1,
   },
   noMedicationsText: {
-    fontSize: 15,
+    fontSize: 13,
     color: Colors.textTertiary,
     textAlign: "center",
     marginTop: 16,
