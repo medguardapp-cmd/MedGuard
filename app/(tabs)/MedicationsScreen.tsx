@@ -44,6 +44,7 @@ import {
 import { MedicationsTab } from "./MedicationsTab";
 import { ReactionsTab } from "./ReactionsTab";
 import { RemindersTab } from "./RemindersTab";
+
 // Types
 interface Medication {
   id: string;
@@ -271,8 +272,9 @@ export default function MedicationsScreen() {
         const isOneTime = !r.days || r.days.length === 0;
 
         if (isOneTime) {
-          // ✅ FIX: Handle one-time reminders without scheduledDate
+          // ✅ FIX: Calculate the scheduled date for one-time reminders
           if (r.scheduledDate) {
+            // If we have a stored scheduled date, use it
             const scheduledDate = normalizeDate(new Date(r.scheduledDate));
             const isToday =
               scheduledDate.getTime() === normalizedToday.getTime();
@@ -282,12 +284,11 @@ export default function MedicationsScreen() {
             return isToday;
           }
 
-          // ✅ NEW: For one-time reminders without scheduledDate, check if they should be active today
+          // ✅ FALLBACK: Calculate based on creation date and time
           // Get the reminder's creation date
           const createdDate = r.createdAt?.toDate
             ? r.createdAt.toDate()
             : new Date(r.createdAt);
-          const normalizedCreated = normalizeDate(createdDate);
 
           // Get the first time from the times array
           const firstTime =
@@ -298,9 +299,8 @@ export default function MedicationsScreen() {
           const reminderDateTime = new Date(createdDate);
           reminderDateTime.setHours(hours, minutes, 0, 0);
 
-          const alarmAlreadyPassedOnCreationDay =
-            reminderDateTime <= createdDate;
-          if (alarmAlreadyPassedOnCreationDay) {
+          // If the time has already passed on creation day, move to next day
+          if (reminderDateTime <= createdDate) {
             reminderDateTime.setDate(reminderDateTime.getDate() + 1);
           }
 
@@ -308,7 +308,7 @@ export default function MedicationsScreen() {
           const isToday = scheduledDay.getTime() === normalizedToday.getTime();
 
           console.log(`One-time reminder ${r.medicationName}:`, {
-            createdDate: normalizedCreated.toDateString(),
+            createdDate: createdDate.toDateString(),
             firstTime: firstTime,
             scheduledDay: scheduledDay.toDateString(),
             isToday: isToday,
@@ -353,7 +353,6 @@ export default function MedicationsScreen() {
 
     return result;
   }, [reminders, takenLogs, medications]);
-
   useEffect(() => {
     const targetUserId = userType === "patient" ? user?.uid : selectedPatientId;
 
@@ -733,6 +732,27 @@ export default function MedicationsScreen() {
     const times = (reminderForm.times ?? ["08:00"]).filter(
       (t) => t.trim() !== "",
     );
+
+    // ✅ Calculate and store scheduledDate for one-time reminders
+    let scheduledDate = null;
+    const isOneTime = normalizedDays.length === 0;
+
+    if (isOneTime && times.length > 0) {
+      const createdDate = new Date();
+      const firstTime = times[0];
+      const [hours, minutes] = firstTime.split(":").map(Number);
+
+      const reminderDateTime = new Date(createdDate);
+      reminderDateTime.setHours(hours, minutes, 0, 0);
+
+      // If the time has already passed today, schedule for tomorrow
+      if (reminderDateTime <= createdDate) {
+        reminderDateTime.setDate(reminderDateTime.getDate() + 1);
+      }
+
+      scheduledDate = reminderDateTime.toISOString();
+    }
+
     const reminderData = {
       medicationId: selectedMedicationForReminder.id,
       medicationName: selectedMedicationForReminder.name,
@@ -746,6 +766,7 @@ export default function MedicationsScreen() {
       durationType: reminderForm.durationType || "none",
       startDate: reminderForm.startDate || null,
       endDate: reminderForm.endDate || null,
+      scheduledDate: scheduledDate, // ✅ Store the calculated date
       createdAt: serverTimestamp(),
     };
 

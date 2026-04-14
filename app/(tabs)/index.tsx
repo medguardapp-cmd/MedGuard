@@ -10,7 +10,6 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  updateDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
@@ -79,6 +78,7 @@ interface ScheduleItem {
   time: string;
   taken: boolean;
   missed: boolean;
+  missedSoft: boolean;
   takenLogId?: string;
   takenVariance: "early" | "late" | "on-time" | null;
   hasInteraction: boolean;
@@ -119,6 +119,8 @@ interface MissedLog {
 // Helpers
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const LATE_THRESHOLD = 15; // minutes - after this time, show as "Late"
+const MISSED_THRESHOLD = 60;
 
 const normalizeDate = (date: Date): Date => {
   const normalized = new Date(date);
@@ -142,7 +144,17 @@ function isoDateKey(date: Date): string {
 }
 
 const getOneTimeReminderDate = (reminder: Reminder): Date => {
-  const createdDate = reminder.createdAt?.toDate
+  // If there's a stored scheduled date, use it
+  if (reminder.scheduledDate) {
+    return normalizeDate(
+      reminder.scheduledDate?.toDate
+        ? reminder.scheduledDate.toDate()
+        : new Date(reminder.scheduledDate),
+    );
+  }
+
+  // Fallback to creation date (backward compatibility)
+  const baseDate = reminder.createdAt?.toDate
     ? reminder.createdAt.toDate()
     : new Date();
 
@@ -152,13 +164,8 @@ const getOneTimeReminderDate = (reminder: Reminder): Date => {
   }
 
   const [hours, minutes] = timeString.split(":").map(Number);
-  const reminderTime = new Date(createdDate);
+  const reminderTime = new Date(baseDate);
   reminderTime.setHours(hours, minutes, 0, 0);
-
-  const now = new Date();
-  while (reminderTime <= now) {
-    reminderTime.setDate(reminderTime.getDate() + 1);
-  }
 
   return normalizeDate(reminderTime);
 };
@@ -172,6 +179,40 @@ const isReminderActiveOnDate = (
 
   const normalizedDate = normalizeDate(date);
 
+  // Handle one-time reminders (no days array or empty days array)
+  if (!reminder.days || reminder.days.length === 0) {
+    // ✅ Use scheduledDate if it exists
+    if (reminder.scheduledDate) {
+      const scheduledDate = normalizeDate(new Date(reminder.scheduledDate));
+      return normalizedDate.getTime() === scheduledDate.getTime();
+    }
+
+    // ✅ Fallback: Calculate based on creation date
+    const createdDate = reminder.createdAt?.toDate
+      ? reminder.createdAt.toDate()
+      : new Date(reminder.createdAt);
+
+    const firstTime =
+      reminder.times && reminder.times.length > 0 ? reminder.times[0] : "08:00";
+    const [hours, minutes] = firstTime.split(":").map(Number);
+
+    const reminderDateTime = new Date(createdDate);
+    reminderDateTime.setHours(hours, minutes, 0, 0);
+
+    // If time passed on creation day, move to next day
+    if (reminderDateTime <= createdDate) {
+      reminderDateTime.setDate(reminderDateTime.getDate() + 1);
+    }
+
+    const scheduledDate = normalizeDate(reminderDateTime);
+    return normalizedDate.getTime() === scheduledDate.getTime();
+  }
+
+  // For recurring reminders with days
+  const dayName = DAY_NAMES[normalizedDate.getDay()];
+  if (!reminder.days.includes(dayName)) return false;
+
+  // Check creation date for recurring reminders
   if (reminder.createdAt) {
     const createdDate = normalizeDate(
       reminder.createdAt?.toDate
@@ -181,14 +222,7 @@ const isReminderActiveOnDate = (
     if (normalizedDate < createdDate) return false;
   }
 
-  if (!reminder.days || reminder.days.length === 0) {
-    const scheduledDate = getOneTimeReminderDate(reminder);
-    return normalizedDate.getTime() === scheduledDate.getTime();
-  }
-
-  const dayName = DAY_NAMES[normalizedDate.getDay()];
-  if (!reminder.days.includes(dayName)) return false;
-
+  // Check date range for recurring reminders
   if (reminder.durationType === "date-range") {
     if (reminder.startDate) {
       const startDate = normalizeDate(new Date(reminder.startDate));
@@ -200,6 +234,7 @@ const isReminderActiveOnDate = (
     }
   }
 
+  // Check quantity for "until-empty" reminders
   if (reminder.durationType === "until-empty") {
     if (!medication || medication.quantity === undefined) return false;
     if (medication.quantity <= 0) return false;
@@ -369,6 +404,11 @@ export default function HomeScreen() {
     useSelectedPatient();
   const [patients, setPatients] = useState<{ id: string; name: string }[]>([]);
   const [showPatientSelector, setShowPatientSelector] = useState(false);
+
+  const toMinutes = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
 
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
@@ -592,7 +632,6 @@ export default function HomeScreen() {
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     if (isPastDay) {
-      // For past days: build from reminders + cross-reference taken_logs and missed_logs
       const pastReminders = getRemindersForDate(
         normalizedDate,
         reminders,
@@ -602,8 +641,10 @@ export default function HomeScreen() {
 
       const scheduledItems: ScheduleItem[] = pastReminders.flatMap((r) => {
         return (r.times || ["08:00"]).map((time) => {
+          // Check for time-specific reminderId first, then fallback to base ID
+          const timeSpecificId = `${r.id}_${time}`;
           const takenLog = logsForDate.find(
-            (l) => l.reminderId === `${r.id}_${time}` || l.reminderId === r.id,
+            (l) => l.reminderId === timeSpecificId || l.reminderId === r.id,
           );
           const wasMissed =
             !takenLog &&
@@ -618,8 +659,6 @@ export default function HomeScreen() {
             dosage: r.medicationDosage,
             time,
             taken: !!takenLog,
-            // Mark as missed only if we've already written the missed log
-            // (avoids showing "missed" before end-of-day write)
             missed: wasMissed,
             late: false,
             takenLogId: takenLog?.id,
@@ -659,12 +698,33 @@ export default function HomeScreen() {
     }
 
     // Today / future: calculate from reminders
+    // ✅ FIX: Include all reminders that are active OR have been taken today
     const dayReminders = getRemindersForDate(
       normalizedDate,
       reminders,
       medications,
     );
-    const items: ScheduleItem[] = dayReminders.flatMap((r) => {
+
+    // ✅ Also include reminders that were taken today but might not be active (e.g., one-time reminders that already passed)
+    const takenReminderIds = logsForDate
+      .filter((l) => l.reminderId !== "quick-take")
+      .map((l) => {
+        // Extract base reminder ID (remove time suffix if present)
+        if (l.reminderId.includes("_")) {
+          return l.reminderId.split("_")[0];
+        }
+        return l.reminderId;
+      });
+
+    // Find reminders that were taken today but not in dayReminders (one-time reminders that are done)
+    const additionalReminders = takenReminderIds
+      .filter((id) => !dayReminders.some((r) => r.id === id))
+      .map((id) => reminders.find((r) => r.id === id))
+      .filter((r): r is Reminder => r !== undefined);
+
+    const allRemindersForDate = [...dayReminders, ...additionalReminders];
+
+    const items: ScheduleItem[] = allRemindersForDate.flatMap((r) => {
       return (r.times || ["08:00"]).map((time) => {
         const med = medications.find((m) => m.id === r.medicationId);
         const sameDayDrugIds = dayReminders
@@ -685,10 +745,24 @@ export default function HomeScreen() {
         const hasSevere = medInteractions.some(
           (i) => getInteractionSeverity(i.description) === "severe",
         );
+
+        // Check for time-specific reminderId first
+        const timeSpecificId = `${r.id}_${time}`;
         const takenLog = logsForDate.find(
-          (l) => l.reminderId === `${r.id}_${time}` || l.reminderId === r.id,
+          (l) => l.reminderId === timeSpecificId || l.reminderId === r.id,
         );
-        const isLate = isTodayDay && !takenLog && time < currentTimeStr;
+        const nowMinutes = toMinutes(currentTimeStr);
+        const scheduledMinutes = toMinutes(time);
+        const diff = nowMinutes - scheduledMinutes;
+
+        const isLate =
+          isTodayDay &&
+          !takenLog &&
+          diff >= LATE_THRESHOLD &&
+          diff < MISSED_THRESHOLD;
+
+        const isMissedSoft =
+          isTodayDay && !takenLog && diff >= MISSED_THRESHOLD;
 
         return {
           reminderId: r.id,
@@ -699,6 +773,7 @@ export default function HomeScreen() {
           taken: !!takenLog,
           missed: false,
           late: isLate,
+          missedSoft: isMissedSoft,
           takenLogId: takenLog?.id,
           takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
           hasInteraction: medInteractions.length > 0,
@@ -746,30 +821,22 @@ export default function HomeScreen() {
     }
 
     try {
+      // Create a time-specific reminderId for the log
+      const timeSpecificReminderId = item.reminderId.includes(`_${item.time}`)
+        ? item.reminderId
+        : `${item.reminderId}_${item.time}`;
+
       await addDoc(collection(db, "users", userId, "taken_logs"), {
         medicationId: item.medicationId,
-        reminderId: item.reminderId,
+        reminderId: timeSpecificReminderId,
         name: item.name,
         dosage: item.dosage,
         takenAt: serverTimestamp(),
         dateKey: dateKey(selectedDate),
       });
 
-      const reminder = reminders.find((r) => r.id === item.reminderId);
-      if (reminder && (!reminder.days || reminder.days.length === 0)) {
-        const timesForToday = reminder.times || [];
-        const takenLogsForReminder = takenLogs.filter(
-          (log) =>
-            log.reminderId === item.reminderId &&
-            log.dateKey === dateKey(selectedDate),
-        );
-        if (takenLogsForReminder.length + 1 >= timesForToday.length) {
-          await updateDoc(
-            doc(db, "users", userId, "reminders", item.reminderId),
-            { enabled: false },
-          );
-        }
-      }
+      // REMOVED: The section that auto-disables one-time reminders
+      // One-time reminders will now stay enabled and visible even after being taken
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to mark as taken");
     }
@@ -1237,7 +1304,18 @@ export default function HomeScreen() {
                           <Text style={styles.missedBadgeText}>Missed</Text>
                         </View>
                       )}
-                      {item.late && !item.taken && (
+                      {item.missedSoft && (
+                        <View style={styles.missedBadge}>
+                          <Ionicons
+                            name="close"
+                            size={12}
+                            color={Colors.error}
+                          />
+                          <Text style={styles.missedBadgeText}>Missed</Text>
+                        </View>
+                      )}
+
+                      {item.late && !item.missedSoft && (
                         <View style={styles.lateBadge}>
                           <Ionicons
                             name="time"
