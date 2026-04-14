@@ -99,6 +99,13 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
   onDeleteSymptomLog,
   onRefresh,
 }) => {
+  console.log("ReactionsTab Debug:", {
+    hasAiAnalysis: !!aiAnalysis,
+    aiAnalysisKeys: aiAnalysis ? Object.keys(aiAnalysis) : [],
+    loadingReactions,
+    reactionsError,
+    todaysMedicationsCount: todaysMedications.length,
+  });
   const [selectedModal, setSelectedModal] = useState<{
     type:
       | "interactions"
@@ -128,7 +135,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         <ActivityIndicator size="large" color={Colors.primary} />
         <Text style={styles.loadingText}>Analyzing your medications...</Text>
         <Text style={[styles.loadingText, { fontSize: 13, marginTop: 4 }]}>
-          Checking interactions, side effects, and community reports
+          Checking interactions and side effects
         </Text>
       </View>
     );
@@ -327,7 +334,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         </TouchableOpacity>
       )}
 
-      {/* Community Reports Summary */}
+      {/* Community Reports Summary
       {communityCount > 0 && (
         <TouchableOpacity
           style={styles.infoCard}
@@ -353,7 +360,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         </TouchableOpacity>
       )}
 
-      {/* My Symptom Log Section */}
+
       <View style={styles.symptomSection}>
         <View style={styles.symptomHeader}>
           <View style={styles.symptomTitleRow}>
@@ -447,7 +454,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
             {symptomLogs.length - 3 !== 1 ? "s" : ""}
           </Text>
         )}
-      </View>
+      </View> */}
 
       {/* Detail Modal - Update the interactions display */}
       <Modal
@@ -738,6 +745,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    paddingBottom: 100,
   },
   loadingContainer: {
     alignItems: "center",
@@ -746,7 +754,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: 12,
-    fontSize: 16,
+    fontSize: 13,
     color: Colors.textSecondary,
   },
   emptyCard: {
@@ -756,7 +764,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   emptyText: {
-    fontSize: 16,
+    fontSize: 13,
     color: Colors.textSecondary,
     marginTop: 16,
     textAlign: "center",
@@ -776,7 +784,7 @@ const styles = StyleSheet.create({
   },
   retryButtonText: {
     color: Colors.surface,
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
   },
   // Today's Medications Section
@@ -795,7 +803,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   todayMedsTitle: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: Colors.text,
   },
@@ -815,16 +823,16 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   todayMedName: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: "500",
     color: Colors.text,
   },
   todayMedDosage: {
-    fontSize: 11,
+    fontSize: 10,
     color: Colors.textSecondary,
   },
   todayMedsNote: {
-    fontSize: 11,
+    fontSize: 10,
     color: Colors.textTertiary,
     fontStyle: "italic",
   },
@@ -840,7 +848,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   summaryTitle: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: "700",
     color: Colors.text,
     marginLeft: 8,
@@ -850,7 +858,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   summaryText: {
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.textSecondary,
     lineHeight: 20,
     marginBottom: 12,
@@ -870,7 +878,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "500",
     color: Colors.textSecondary,
   },
@@ -878,7 +886,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   alertSectionTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
     color: Colors.error,
     marginBottom: 8,
@@ -900,13 +908,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   alertTitle: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
     color: Colors.text,
     marginBottom: 2,
   },
   alertMessage: {
-    fontSize: 12,
+    fontSize: 10,
     color: Colors.textSecondary,
   },
   infoCard: {
@@ -927,12 +935,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   infoCardTitle: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: Colors.text,
   },
   infoCardSummary: {
-    fontSize: 13,
+    fontSize: 11,
     color: Colors.textSecondary,
     marginBottom: 12,
   },

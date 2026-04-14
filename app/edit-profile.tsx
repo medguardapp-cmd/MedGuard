@@ -338,6 +338,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
+    paddingBottom: 100,
   },
   header: {
     flexDirection: "row",
@@ -348,12 +349,13 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
+    paddingTop: 50,
   },
   backButton: {
     padding: 4,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "600",
     color: "#0f172a",
   },
@@ -368,7 +370,7 @@ const styles = StyleSheet.create({
   saveButtonText: {
     color: "white",
     fontWeight: "600",
-    fontSize: 14,
+    fontSize: 13,
   },
   profileImageSection: {
     alignItems: "center",
@@ -397,7 +399,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   profileInitials: {
-    fontSize: 36,
+    fontSize: 30,
     fontWeight: "600",
     color: "#ffffff",
   },
@@ -412,7 +414,7 @@ const styles = StyleSheet.create({
     borderColor: "#ffffff",
   },
   userEmail: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#64748b",
   },
   form: {
@@ -423,7 +425,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#374151",
   },
@@ -433,7 +435,7 @@ const styles = StyleSheet.create({
     borderColor: "#d1d5db",
     borderRadius: 12,
     padding: 14,
-    fontSize: 16,
+    fontSize: 13,
     color: "#0f172a",
   },
   helperText: {
@@ -453,7 +455,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   genderButtonText: {
-    fontSize: 16,
+    fontSize: 13,
     color: "#0f172a",
   },
   customGenderInput: {
@@ -488,7 +490,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "600",
     color: "#0f172a",
     marginBottom: 16,
@@ -504,7 +506,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e2e8f0",
   },
   modalOptionText: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#0f172a",
   },
   modalCloseButton: {
@@ -515,7 +517,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
   },
   modalCloseText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#64748b",
   },

@@ -824,6 +824,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
+    paddingBottom: 50,
   },
   header: {
     flexDirection: "row",
@@ -831,6 +832,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 12,
+    paddingTop: 50,
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
@@ -839,7 +841,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "600",
     color: "#0f172a",
   },
@@ -855,7 +857,7 @@ const styles = StyleSheet.create({
   saveButtonText: {
     color: "white",
     fontWeight: "600",
-    fontSize: 14,
+    fontSize: 13,
   },
   section: {
     marginTop: 20,
@@ -868,7 +870,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f172a",
   },
@@ -884,13 +886,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   infoLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "500",
     color: "#64748b",
     marginBottom: 6,
   },
   infoValue: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#0f172a",
     fontWeight: "500",
   },
@@ -899,7 +901,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   input: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#0f172a",
     borderWidth: 1,
     borderColor: "#e2e8f0",
@@ -926,7 +928,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
   },
   dropdownButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#0f172a",
   },
   modalOverlay: {
@@ -949,7 +951,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "600",
     color: "#0f172a",
   },

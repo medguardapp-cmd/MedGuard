@@ -1,4 +1,5 @@
 // app/(tabs)/medication-logs.tsx
+import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
@@ -275,7 +276,7 @@ export default function MedicationLogsScreen() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3b82f6" />
+          <ActivityIndicator size="large" color={Colors.primary} />
           <Text style={styles.loadingText}>Loading medication history...</Text>
         </View>
       </SafeAreaView>
@@ -445,7 +446,7 @@ export default function MedicationLogsScreen() {
                     </View>
                   )} */}
                   <View style={styles.statItem}>
-                    <Ionicons name="medical" size={18} color="#3b82f6" />
+                    <Ionicons name="medical" size={18} color={Colors.primary} />
                     <Text style={styles.statItemText}>
                       {totalScheduled} scheduled
                     </Text>
@@ -518,7 +519,7 @@ export default function MedicationLogsScreen() {
                             <Text
                               style={[
                                 styles.takenBadgeText,
-                                { color: "#3b82f6" },
+                                { color: Colors.primary },
                               ]}
                             >
                               · Early
@@ -724,6 +725,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
+    paddingBottom: 100,
   },
   loadingContainer: {
     flex: 1,
@@ -741,6 +743,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 16,
+    paddingTop: 50,
     backgroundColor: "#ffffff",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
@@ -749,7 +752,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "600",
     color: "#0f172a",
   },
@@ -775,7 +778,7 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#3b82f6",
+    color: Colors.primary,
     marginBottom: 4,
   },
   statLabel: {
@@ -814,10 +817,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
   },
   filterTabActive: {
-    backgroundColor: "#3b82f6",
+    backgroundColor: Colors.primary,
   },
   filterText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "500",
     color: "#64748b",
   },
@@ -833,7 +836,7 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f172a",
     marginTop: 16,
@@ -862,7 +865,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   logDate: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f172a",
   },
@@ -888,7 +891,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   statItemText: {
-    fontSize: 13,
+    fontSize: 12,
     color: "#64748b",
   },
   missedText: {
@@ -901,8 +904,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   viewDetailsText: {
-    fontSize: 13,
-    color: "#3b82f6",
+    fontSize: 12,
+    color: Colors.primary,
   },
   modalContainer: {
     flex: 1,

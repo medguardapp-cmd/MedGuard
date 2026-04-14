@@ -31,6 +31,7 @@ import {
   getDoc,
   getDocs,
   query,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -1073,7 +1074,6 @@ export async function generateReactionsAnalysis(
   const allergies = (medicalData.allergies ?? []) as string[];
   const isPregnant = (medicalData.isPregnant ?? false) as boolean;
   const isBreastfeeding = (medicalData.isBreastfeeding ?? false) as boolean;
-  const trimester = (medicalData.trimester ?? null) as number | null;
 
   const [medContext, interactionContext, userLogsSnap, communityData] =
     await Promise.all([
@@ -1107,4 +1107,123 @@ export async function generateReactionsAnalysis(
       return parts.join(" ");
     })
     .join("\n");
+
+  // ✅ ADD THE MISSING OPENAI CALL HERE
+  const systemPrompt = `You are a clinical medication analysis AI. Analyze the patient's medications and provide a comprehensive report.
+
+PATIENT PROFILE:
+Name: ${name}
+Age: ${age} | Gender: ${gender}
+Blood type: ${bloodType} | Height: ${height} cm | Weight: ${weight} kg
+Conditions: ${conditions.join(", ") || "None"}
+Allergies: ${allergies.join(", ") || "None"}
+Pregnancy: ${isPregnant ? "Yes" : "No"}
+Breastfeeding: ${isBreastfeeding ? "Yes" : "No"}
+
+CURRENT MEDICATIONS:
+${medSummary}
+
+DATABASE INFORMATION:
+${medContext || "No additional database info"}
+
+KNOWN INTERACTIONS:
+${interactionContext || "No interactions found"}
+
+USER'S SYMPTOM LOGS:
+${userLogs}
+
+COMMUNITY REPORTS (similar conditions):
+${communityData || "No community data available"}
+
+Return ONLY valid JSON with this exact structure:
+{
+  "summary": "A concise overall summary of the patient's medication profile",
+  "sideEffects": [
+    {
+      "medicationName": "name",
+      "medicationId": "id",
+      "summary": "brief summary",
+      "common": ["side effect 1", "side effect 2"],
+      "serious": ["serious effect 1"],
+      "profileWarnings": []
+    }
+  ],
+  "interactions": [
+    {
+      "drugA": "name",
+      "drugB": "name",
+      "severity": "mild|moderate|severe",
+      "severityReason": "why this severity",
+      "description": "detailed description",
+      "recommendation": "what to do"
+    }
+  ],
+  "profileWarnings": [
+    {
+      "type": "condition|pregnancy|breastfeeding|age|allergy",
+      "warning": "warning message",
+      "severity": "info|caution|danger"
+    }
+  ],
+  "communityReports": [
+    {
+      "symptom": "symptom name",
+      "reportCount": 0,
+      "avgSeverity": 0,
+      "medications": [],
+      "note": ""
+    }
+  ]
+}`;
+
+  try {
+    const res = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "system", content: systemPrompt }],
+        max_tokens: 2000,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      console.error("❌ [Reactions] API error:", err);
+      throw new Error(err?.error?.message ?? "OpenAI API error");
+    }
+
+    const json = await res.json();
+    const raw = json.choices?.[0]?.message?.content ?? "{}";
+    console.log("✅ [Reactions] Analysis generated");
+
+    const analysis = JSON.parse(raw) as ReactionsAnalysis;
+
+    // Cache the result
+    await setDoc(doc(db, "users", uid, "reactions_cache", "latest"), {
+      ...analysis,
+      lastUpdated: new Date(),
+    });
+
+    return {
+      ...analysis,
+      lastUpdated: new Date(),
+    };
+  } catch (error: any) {
+    console.error("❌ [Reactions] Error:", error.message);
+    return {
+      sideEffects: [],
+      interactions: [],
+      profileWarnings: [],
+      communityReports: [],
+      summary:
+        "Unable to generate analysis at this time. Please try again later.",
+      lastUpdated: new Date(),
+    };
+  }
 }

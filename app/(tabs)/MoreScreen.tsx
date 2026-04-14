@@ -236,10 +236,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
+    paddingBottom: 100,
   },
   profileSection: {
     alignItems: "center",
-    paddingTop: 32,
+    paddingTop: 100,
     paddingBottom: 24,
     backgroundColor: "white",
     borderBottomWidth: 1,
@@ -265,7 +266,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   profileInitials: {
-    fontSize: 36,
+    fontSize: 30,
     fontWeight: "600",
     color: "#ffffff",
   },
@@ -280,13 +281,13 @@ const styles = StyleSheet.create({
     borderColor: "#ffffff",
   },
   userName: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "700",
     color: "#0f172a",
     marginBottom: 4,
   },
   userEmail: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#64748b",
     marginBottom: 8,
   },
@@ -301,7 +302,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   userTypeText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "500",
     color: "#3b82f6",
   },
@@ -317,7 +318,7 @@ const styles = StyleSheet.create({
     borderColor: "#e2e8f0",
   },
   editProfileButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "500",
     color: "#3b82f6",
   },
@@ -332,7 +333,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#475569",
   },
@@ -361,13 +362,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   navButtonTitle: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#0f172a",
     marginBottom: 2,
   },
   navButtonSubtitle: {
-    fontSize: 13,
+    fontSize: 10,
     color: "#64748b",
   },
   settingItem: {
@@ -387,7 +388,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   settingItemText: {
-    fontSize: 15,
+    fontSize: 13,
     color: "#0f172a",
   },
   logoutButton: {

@@ -1,5 +1,4 @@
 // services/reminderAlarmService.ts
-import { Audio } from "expo-av";
 import * as Notifications from "expo-notifications";
 
 // Configure notification handler for alarms
@@ -12,50 +11,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Sound reference for custom alarm
-let alarmSound: Audio.Sound | null = null;
-
-// Load alarm sound
-export async function loadAlarmSound() {
-  try {
-    if (!alarmSound) {
-      const { sound } = await Audio.Sound.createAsync(
-        require("../../assets/sounds/alarm.mp3"), // You'll need to add this file
-        { shouldPlay: false },
-      );
-      alarmSound = sound;
-    }
-    return alarmSound;
-  } catch (error) {
-    console.log("Using default notification sound");
-    return null;
-  }
-}
-
-// Play alarm sound
-export async function playAlarmSound() {
-  try {
-    const sound = await loadAlarmSound();
-    if (sound) {
-      await sound.setPositionAsync(0);
-      await sound.playAsync();
-    }
-  } catch (error) {
-    console.error("Error playing alarm sound:", error);
-  }
-}
-
-// Stop alarm sound
-export async function stopAlarmSound() {
-  try {
-    if (alarmSound) {
-      await alarmSound.stopAsync();
-    }
-  } catch (error) {
-    console.error("Error stopping alarm sound:", error);
-  }
-}
-
 // Schedule a medication reminder alarm
 export async function scheduleMedicationAlarm(
   reminderId: string,
@@ -64,23 +19,38 @@ export async function scheduleMedicationAlarm(
   scheduledTime: Date,
   options?: {
     repeat?: boolean;
-    intervalMinutes?: number;
-    snoozeEnabled?: boolean;
+    weekdays?: number[];
   },
 ) {
-  // Cancel any existing alarm for this reminder
   await Notifications.cancelScheduledNotificationAsync(reminderId);
 
-  const trigger: Notifications.NotificationTriggerInput = options?.repeat
-    ? {
-        hour: scheduledTime.getHours(),
-        minute: scheduledTime.getMinutes(),
-        repeats: true,
-      }
-    : {
-        date: scheduledTime,
-        channelId: "medication-alarms",
-      };
+  let trigger: any;
+
+  if (options?.repeat && options.weekdays && options.weekdays.length > 0) {
+    trigger = {
+      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+      hour: scheduledTime.getHours(),
+      minute: scheduledTime.getMinutes(),
+      weekday: options.weekdays[0] + 1,
+      repeats: true,
+    };
+  } else if (options?.repeat) {
+    trigger = {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: scheduledTime.getHours(),
+      minute: scheduledTime.getMinutes(),
+      repeats: true,
+    };
+  } else {
+    const secondsFromNow = Math.max(
+      1,
+      Math.floor((scheduledTime.getTime() - Date.now()) / 1000),
+    );
+    trigger = {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: secondsFromNow,
+    };
+  }
 
   await Notifications.scheduleNotificationAsync({
     identifier: reminderId,
@@ -113,6 +83,7 @@ export async function scheduleSnoozeAlarm(
 ) {
   const snoozeTime = new Date();
   snoozeTime.setMinutes(snoozeTime.getMinutes() + snoozeMinutes);
+  const secondsFromNow = snoozeMinutes * 60;
 
   await Notifications.scheduleNotificationAsync({
     identifier: `${reminderId}_snooze`,
@@ -131,8 +102,8 @@ export async function scheduleSnoozeAlarm(
       },
     },
     trigger: {
-      date: snoozeTime,
-      channelId: "medication-alarms",
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: secondsFromNow,
     },
   });
 }
@@ -153,7 +124,7 @@ export async function cancelAllUserAlarms(userId: string) {
   }
 }
 
-// Setup notification categories for action buttons (Android/iOS)
+// Setup notification categories for action buttons
 export async function setupNotificationCategories() {
   await Notifications.setNotificationCategoryAsync("medication_action", [
     {
@@ -183,7 +154,7 @@ export async function setupNotificationCategories() {
   ]);
 }
 
-// Handle notification response (when user taps action buttons)
+// Handle notification response
 export function handleNotificationResponse(
   response: Notifications.NotificationResponse,
   onTake: (reminderId: string) => void,
@@ -207,7 +178,6 @@ export function handleNotificationResponse(
       onSkip(reminderId);
       break;
     default:
-      // User tapped the notification body
       console.log("Notification tapped:", reminderId);
       break;
   }

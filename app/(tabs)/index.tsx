@@ -1528,7 +1528,6 @@ export default function HomeScreen() {
               />
             </TouchableOpacity>
           )}
-
           {/* Selected Date Label */}
           <View style={styles.selectedDateContainer}>
             <Text style={styles.selectedDateTitle}>
@@ -1545,7 +1544,6 @@ export default function HomeScreen() {
               </View>
             )}
           </View>
-
           {/* Schedule List */}
           {loadingInteractions && schedule.length === 0 ? (
             <View style={styles.loadingCard}>
@@ -1769,7 +1767,6 @@ export default function HomeScreen() {
               )}
             </View>
           )}
-
           {/* As Needed (Quick Take) Logs */}
           {isTodaySelected &&
             takenLogs.filter(
@@ -1823,10 +1820,79 @@ export default function HomeScreen() {
                 </View>
               </>
             )}
+          {/* <Text style={styles.sectionTitle}>Quick Actions</Text>
 
-          {/* Quick Actions
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
           <View style={styles.actionsContainer}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={async () => {
+                try {
+                  // Request permissions
+                  const { status } = await Notifications.getPermissionsAsync();
+                  if (status !== "granted") {
+                    await Notifications.requestPermissionsAsync();
+                  }
+
+                  // Test 1: Immediate notification
+                  await Notifications.scheduleNotificationAsync({
+                    content: {
+                      title: "🔔 Test Notification",
+                      body: "This is an immediate test notification!",
+                      sound: "default",
+                    },
+                    trigger: null, // null is fine for immediate
+                  });
+
+                  // Test 2: 5-second delayed alarm
+                  await Notifications.scheduleNotificationAsync({
+                    content: {
+                      title: "⏰ Test Alarm",
+                      body: "This is your test medication reminder!",
+                      sound: "default",
+                      priority: Notifications.AndroidNotificationPriority.HIGH,
+                    },
+                    trigger: {
+                      seconds: 5, // Use seconds instead of date
+                      channelId: "medication-alarms",
+                    },
+                  });
+
+                  Alert.alert(
+                    "✅ Test Sent",
+                    "Check your notifications!\n\n• Immediate notification should appear now\n• Alarm notification in 5 seconds",
+                  );
+                } catch (error) {
+                  console.error("Test error:", error);
+                  Alert.alert("❌ Error", error.message);
+                }
+              }}
+            >
+              <View
+                style={[styles.actionIcon, { backgroundColor: Colors.primary }]}
+              >
+                <Ionicons
+                  name="alarm-outline"
+                  size={28}
+                  color={Colors.surface}
+                />
+              </View>
+              <Text style={styles.actionText}>Test Alarm</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                router.navigate("/(tabs)/MedicationsScreen");
+                setTimeout(() => tabEvents.emit("openLogReaction"), 300);
+              }}
+            >
+              <View
+                style={[styles.actionIcon, { backgroundColor: Colors.warning }]}
+              >
+                <Ionicons name="clipboard" size={28} color={Colors.surface} />
+              </View>
+              <Text style={styles.actionText}>Log Reaction</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionButton}
               onPress={() => {
@@ -1894,7 +1960,6 @@ export default function HomeScreen() {
               <Text style={styles.actionText}>SOS</Text>
             </TouchableOpacity>
           </View> */}
-
           {/* Log a Dose chips */}
           {isTodaySelected &&
             medications.filter((m) => m.active).length > 0 && (
@@ -1975,7 +2040,6 @@ export default function HomeScreen() {
                 </ScrollView>
               </>
             )}
-
           <View style={{ height: 100 }} />
         </View>
       </ScrollView>
