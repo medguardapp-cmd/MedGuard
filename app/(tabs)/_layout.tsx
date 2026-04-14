@@ -45,7 +45,7 @@ export default function TabLayout() {
             ),
           }}
         />
-
+        {/* 
         <Tabs.Screen
           name="ScanScreen"
           options={{
@@ -53,7 +53,7 @@ export default function TabLayout() {
               <Ionicons name="scan-outline" size={22} color={color} />
             ),
           }}
-        />
+        /> */}
 
         <Tabs.Screen
           name="AssistantScreen"

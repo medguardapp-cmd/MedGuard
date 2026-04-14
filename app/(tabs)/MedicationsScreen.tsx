@@ -353,15 +353,38 @@ export default function MedicationsScreen() {
 
     return result;
   }, [reminders, takenLogs, medications]);
+
   useEffect(() => {
+    if (userType === undefined) {
+      setLoading(false); // ← add this
+      return;
+    }
+
+    if (userType === "patient") {
+      if (!user?.uid) return;
+    }
+    console.log("🔍 useEffect running with:", {
+      userType,
+      uid: user?.uid,
+      selectedPatientId,
+    });
+    if (userType === "caregiver") {
+      if (!selectedPatientId) {
+        setLoading(false);
+        return;
+      }
+    }
+
     const targetUserId = userType === "patient" ? user?.uid : selectedPatientId;
 
     if (!targetUserId) {
-      console.log("⏳ No target user ID yet");
+      setLoading(false);
       return;
     }
 
     console.log("🔍 Loading data for user:", targetUserId);
+
+    let isMounted = true;
 
     const unsubscribeMeds = onSnapshot(
       query(
@@ -369,29 +392,35 @@ export default function MedicationsScreen() {
         orderBy("createdAt", "desc"),
       ),
       (snapshot) => {
-        setMedications(
-          snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          })) as Medication[],
-        );
-        setLoading(false);
+        if (isMounted) {
+          setMedications(
+            snapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })) as Medication[],
+          );
+          setLoading(false);
+        }
       },
       (error) => {
         console.error("Error loading medications:", error);
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       },
     );
 
     const unsubscribeReminders = onSnapshot(
       collection(db, "users", targetUserId, "reminders"),
       (snapshot) => {
-        setReminders(
-          snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          })) as Reminder[],
-        );
+        if (isMounted) {
+          setReminders(
+            snapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })) as Reminder[],
+          );
+        }
       },
       (error) => {
         console.error("Error loading reminders:", error);
@@ -404,12 +433,14 @@ export default function MedicationsScreen() {
         orderBy("logged_at", "desc"),
       ),
       (snapshot) => {
-        setSymptomLogs(
-          snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          })) as SymptomLog[],
-        );
+        if (isMounted) {
+          setSymptomLogs(
+            snapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })) as SymptomLog[],
+          );
+        }
       },
       (error) => {
         console.error("Error loading symptom logs:", error);
@@ -419,12 +450,14 @@ export default function MedicationsScreen() {
     const unsubscribeTaken = onSnapshot(
       collection(db, "users", targetUserId, "taken_logs"),
       (snapshot) => {
-        setTakenLogs(
-          snapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          })) as TakenLog[],
-        );
+        if (isMounted) {
+          setTakenLogs(
+            snapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })) as TakenLog[],
+          );
+        }
       },
       (error) => {
         console.error("Error loading taken logs:", error);
@@ -432,6 +465,7 @@ export default function MedicationsScreen() {
     );
 
     return () => {
+      isMounted = false;
       unsubscribeMeds();
       unsubscribeReminders();
       unsubscribeLogs();
@@ -888,7 +922,18 @@ export default function MedicationsScreen() {
         : [...prev.medication_ids, medId],
     }));
   };
-
+  if (userType === "patient" && !user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={{ marginTop: 10, color: Colors.textSecondary }}>
+            Loading your profile...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
