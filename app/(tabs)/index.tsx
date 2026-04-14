@@ -10,6 +10,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
@@ -113,6 +114,19 @@ interface MissedLog {
   scheduledTime: string;
   dateKey: string;
   missedAt: any;
+}
+interface ReminderStatusLog {
+  id: string;
+  reminderId: string;
+  medicationId: string;
+  name: string;
+  dosage: string;
+  scheduledTime: string;
+  dateKey: string;
+  status: "not-taken" | "taken" | "late" | "missed";
+  takenAt?: any;
+  takenVariance?: "early" | "late" | "on-time" | null;
+  updatedAt: any;
 }
 
 // ─────────────────────────────────────────────
@@ -361,7 +375,151 @@ async function saveMissedLogsForDate(
 
   await batch.commit();
 }
+const getReminderLogId = (
+  reminderId: string,
+  time: string,
+  dateKey: string,
+): string => {
+  return `${reminderId}_${time}_${dateKey.replace(/\s/g, "_")}`;
+};
 
+// Initialize today's reminders as "not-taken"
+async function initializeTodayReminderLogs(
+  userId: string,
+  today: Date,
+  reminders: Reminder[],
+  medications: Medication[],
+): Promise<void> {
+  const normalizedDate = normalizeDate(today);
+  const dk = dateKey(normalizedDate);
+  const activeReminders = getRemindersForDate(
+    normalizedDate,
+    reminders,
+    medications,
+  );
+
+  if (activeReminders.length === 0) return;
+
+  const batch = writeBatch(db);
+  let hasChanges = false;
+
+  for (const reminder of activeReminders) {
+    for (const time of reminder.times || ["08:00"]) {
+      const logId = getReminderLogId(reminder.id, time, dk);
+      const logRef = doc(db, "users", userId, "reminder_status_logs", logId);
+
+      // Check if log already exists
+      const { getDoc } = await import("firebase/firestore");
+      const existingLog = await getDoc(logRef);
+
+      if (!existingLog.exists()) {
+        batch.set(logRef, {
+          reminderId: reminder.id,
+          medicationId: reminder.medicationId,
+          name: reminder.medicationName,
+          dosage: reminder.medicationDosage,
+          scheduledTime: time,
+          dateKey: dk,
+          status: "not-taken",
+          updatedAt: serverTimestamp(),
+        });
+        hasChanges = true;
+      }
+    }
+  }
+
+  if (hasChanges) {
+    await batch.commit();
+  }
+}
+
+// Initialize today's reminders as "not-taken"
+
+async function updateReminderStatuses(
+  userId: string,
+  today: Date,
+  reminders: Reminder[],
+  medications: Medication[],
+  takenLogs: TakenLog[],
+): Promise<void> {
+  const normalizedDate = normalizeDate(today);
+  const dk = dateKey(normalizedDate);
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const activeReminders = getRemindersForDate(
+    normalizedDate,
+    reminders,
+    medications,
+  );
+  const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
+
+  const batch = writeBatch(db);
+  let hasChanges = false;
+
+  for (const reminder of activeReminders) {
+    for (const time of reminder.times || ["08:00"]) {
+      const logId = getReminderLogId(reminder.id, time, dk);
+      const logRef = doc(db, "users", userId, "reminder_status_logs", logId);
+
+      // Check if already taken in taken_logs
+      const timeSpecificId = `${reminder.id}_${time}`;
+      const takenLog = logsForDate.find(
+        (l) => l.reminderId === timeSpecificId || l.reminderId === reminder.id,
+      );
+
+      if (takenLog) {
+        // Already taken, update status to "taken" if not already
+        const { getDoc } = await import("firebase/firestore");
+        const existingLog = await getDoc(logRef);
+
+        if (existingLog.exists() && existingLog.data()?.status !== "taken") {
+          const variance = getTakenVariance(time, takenLog);
+
+          batch.update(logRef, {
+            status: "taken",
+            takenAt: takenLog.takenAt,
+            takenVariance: variance,
+            updatedAt: serverTimestamp(),
+          });
+          hasChanges = true;
+        }
+        continue;
+      }
+
+      // Check if not taken - determine status based on time
+      const { getDoc } = await import("firebase/firestore");
+      const existingLog = await getDoc(logRef);
+      if (!existingLog.exists()) continue;
+
+      const scheduledMinutes = toMinutes(time);
+      const diff = currentMinutes - scheduledMinutes;
+      let newStatus: "not-taken" | "late" | "missed" = "not-taken";
+
+      // Soft missed = 6 hours (360 minutes)
+      const SOFT_MISSED_THRESHOLD = 360; // 6 hours
+
+      if (diff >= SOFT_MISSED_THRESHOLD) {
+        newStatus = "missed";
+      } else if (diff >= MISSED_THRESHOLD) {
+        newStatus = "late";
+      }
+
+      const currentStatus = existingLog.data()?.status;
+      if (currentStatus !== newStatus && newStatus !== "not-taken") {
+        batch.update(logRef, {
+          status: newStatus,
+          updatedAt: serverTimestamp(),
+        });
+        hasChanges = true;
+      }
+    }
+  }
+
+  if (hasChanges) {
+    await batch.commit();
+  }
+}
 // ─────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────
@@ -378,6 +536,9 @@ export default function HomeScreen() {
   const [loadingInteractions, setLoadingInteractions] = useState(false);
   const [interactionsLoaded, setInteractionsLoaded] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
+  const [reminderStatusLogs, setReminderStatusLogs] = useState<
+    ReminderStatusLog[]
+  >([]);
 
   // Quick Take modal state
   const [quickTakeVisible, setQuickTakeVisible] = useState(false);
@@ -486,11 +647,25 @@ export default function HomeScreen() {
       },
     );
 
+    // ADD THIS NEW LISTENER:
+    const unsubReminderStatus = onSnapshot(
+      collection(db, "users", targetUserId, "reminder_status_logs"),
+      (snap) => {
+        setReminderStatusLogs(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+          })) as ReminderStatusLog[],
+        );
+      },
+    );
+
     return () => {
       unsubMeds();
       unsubReminders();
       unsubTaken();
       unsubMissed();
+      unsubReminderStatus(); // ADD THIS
     };
   }, [selectedPatientId, userType]);
 
@@ -546,6 +721,41 @@ export default function HomeScreen() {
       medications,
       takenLogs,
     ).catch(console.warn);
+  }, [reminders, medications, takenLogs, selectedPatientId, userType]);
+
+  useEffect(() => {
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+    if (!targetUserId || reminders.length === 0) return;
+
+    const todayDate = normalizeDate(new Date());
+
+    // Initialize today's reminders as "not-taken"
+    initializeTodayReminderLogs(
+      targetUserId,
+      todayDate,
+      reminders,
+      medications,
+    ).catch(console.warn);
+
+    // Update statuses periodically
+    const updateStatuses = () => {
+      updateReminderStatuses(
+        targetUserId,
+        todayDate,
+        reminders,
+        medications,
+        takenLogs,
+      ).catch(console.warn);
+    };
+
+    // Update immediately
+    updateStatuses();
+
+    // Set up interval to update every minute
+    const interval = setInterval(updateStatuses, 60000);
+
+    return () => clearInterval(interval);
   }, [reminders, medications, takenLogs, selectedPatientId, userType]);
 
   // ─── Load interactions ────────────────────────
@@ -800,7 +1010,12 @@ export default function HomeScreen() {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
 
+    const dk = dateKey(selectedDate);
+    const logId = getReminderLogId(item.reminderId, item.time, dk);
+    const logRef = doc(db, "users", userId, "reminder_status_logs", logId);
+
     if (item.taken && item.takenLogId) {
+      // Undo logic - update BOTH collections
       Alert.alert(
         "Undo taken?",
         "This will mark this medication as not taken.",
@@ -810,6 +1025,14 @@ export default function HomeScreen() {
             text: "Undo",
             style: "destructive",
             onPress: async () => {
+              // Update reminder_status_log
+              await updateDoc(logRef, {
+                status: "not-taken",
+                takenAt: null,
+                takenVariance: null,
+                updatedAt: serverTimestamp(),
+              });
+              // Delete from taken_logs
               await deleteDoc(
                 doc(db, "users", userId, "taken_logs", item.takenLogId!),
               );
@@ -821,26 +1044,52 @@ export default function HomeScreen() {
     }
 
     try {
-      // Create a time-specific reminderId for the log
-      const timeSpecificReminderId = item.reminderId.includes(`_${item.time}`)
-        ? item.reminderId
-        : `${item.reminderId}_${item.time}`;
+      const now = new Date();
+      const takenVariance = getTakenVarianceForTime(item.time, now);
 
+      // UPDATE reminder_status_log (Primary)
+      await setDoc(logRef, {
+        reminderId: item.reminderId,
+        medicationId: item.medicationId,
+        name: item.name,
+        dosage: item.dosage,
+        scheduledTime: item.time,
+        dateKey: dk,
+        status: "taken",
+        takenAt: serverTimestamp(),
+        takenVariance: takenVariance,
+        updatedAt: serverTimestamp(),
+      });
+
+      // ALSO keep taken_logs for backward compatibility
+      const timeSpecificReminderId = `${item.reminderId}_${item.time}`;
       await addDoc(collection(db, "users", userId, "taken_logs"), {
         medicationId: item.medicationId,
         reminderId: timeSpecificReminderId,
         name: item.name,
         dosage: item.dosage,
         takenAt: serverTimestamp(),
-        dateKey: dateKey(selectedDate),
+        dateKey: dk,
       });
 
-      // REMOVED: The section that auto-disables one-time reminders
-      // One-time reminders will now stay enabled and visible even after being taken
+      console.log(`✅ Marked as taken in BOTH collections`);
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to mark as taken");
     }
   };
+  // Helper function
+  function getTakenVarianceForTime(
+    scheduledTime: string,
+    takenAt: Date,
+  ): "early" | "late" | "on-time" | null {
+    const takenMinutes = takenAt.getHours() * 60 + takenAt.getMinutes();
+    const [sh, sm] = scheduledTime.split(":").map(Number);
+    const scheduledMinutes = sh * 60 + sm;
+    const diff = takenMinutes - scheduledMinutes;
+    if (diff > 15) return "late";
+    if (diff < -15) return "early";
+    return "on-time";
+  }
 
   // ─── Quick Take ───────────────────────────────
   const openQuickTake = (med?: Medication) => {

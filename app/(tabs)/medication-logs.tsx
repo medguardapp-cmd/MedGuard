@@ -18,6 +18,20 @@ import { auth, db } from "../../lib/firebase";
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
+interface ReminderStatusLog {
+  id: string;
+  reminderId: string;
+  medicationId: string;
+  name: string;
+  dosage: string;
+  scheduledTime: string;
+  dateKey: string;
+  status: "not-taken" | "taken" | "late" | "missed";
+  takenAt?: any;
+  takenVariance?: "early" | "late" | "on-time" | null;
+  updatedAt: any;
+}
+
 interface TakenLog {
   id: string;
   medicationId: string;
@@ -95,6 +109,9 @@ const getComplianceRate = (taken: number, missed: number): number => {
 // ─────────────────────────────────────────────
 export default function MedicationLogsScreen() {
   const router = useRouter();
+  const [reminderStatusLogs, setReminderStatusLogs] = useState<
+    ReminderStatusLog[]
+  >([]);
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
   const [missedLogs, setMissedLogs] = useState<MissedLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,13 +131,33 @@ export default function MedicationLogsScreen() {
       return;
     }
 
+    let statusReady = false;
     let takenReady = false;
     let missedReady = false;
 
     const checkReady = () => {
-      if (takenReady && missedReady) setLoading(false);
+      if (statusReady && takenReady && missedReady) setLoading(false);
     };
 
+    // Listen to reminder_status_logs (primary source)
+    const unsubStatus = onSnapshot(
+      query(
+        collection(db, "users", userId, "reminder_status_logs"),
+        orderBy("updatedAt", "desc"),
+      ),
+      (snap) => {
+        setReminderStatusLogs(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+          })) as ReminderStatusLog[],
+        );
+        statusReady = true;
+        checkReady();
+      },
+    );
+
+    // Keep taken_logs for backward compatibility and quick-takes
     const unsubTaken = onSnapshot(
       query(
         collection(db, "users", userId, "taken_logs"),
@@ -150,34 +187,53 @@ export default function MedicationLogsScreen() {
     );
 
     return () => {
+      unsubStatus();
       unsubTaken();
       unsubMissed();
     };
   }, []);
 
-  // ─── Group logs by date ───────────────────────
+  // ─── Group logs by date from reminder_status_logs ───────────────────────
   const getLogsByDate = () => {
     const logsByDate: Record<
       string,
-      { taken: TakenLog[]; missed: MissedLog[] }
+      {
+        taken: ReminderStatusLog[];
+        missed: ReminderStatusLog[];
+        late: ReminderStatusLog[];
+        notTaken: ReminderStatusLog[];
+      }
     > = {};
 
-    takenLogs.forEach((log) => {
+    // Process reminder_status_logs
+    reminderStatusLogs.forEach((log) => {
       if (!log.dateKey) return;
-      if (!logsByDate[log.dateKey])
-        logsByDate[log.dateKey] = { taken: [], missed: [] };
-      logsByDate[log.dateKey].taken.push(log);
-    });
+      if (!logsByDate[log.dateKey]) {
+        logsByDate[log.dateKey] = {
+          taken: [],
+          missed: [],
+          late: [],
+          notTaken: [],
+        };
+      }
 
-    missedLogs.forEach((log) => {
-      if (!log.dateKey) return;
-      if (!logsByDate[log.dateKey])
-        logsByDate[log.dateKey] = { taken: [], missed: [] };
-      logsByDate[log.dateKey].missed.push(log);
+      if (log.status === "taken") {
+        // Put late variance into 'late' array instead of 'taken'
+        if (log.takenVariance === "late") {
+          logsByDate[log.dateKey].late.push(log);
+        } else {
+          logsByDate[log.dateKey].taken.push(log);
+        }
+      } else if (log.status === "missed") {
+        logsByDate[log.dateKey].missed.push(log);
+      } else if (log.status === "late") {
+        logsByDate[log.dateKey].late.push(log);
+      } else if (log.status === "not-taken") {
+        logsByDate[log.dateKey].notTaken.push(log);
+      }
     });
 
     // Sort dates newest-first
-    // dateKey is Date.toDateString() — parse with new Date()
     const sortedDates = Object.keys(logsByDate).sort(
       (a, b) => new Date(b).getTime() - new Date(a).getTime(),
     );
@@ -189,18 +245,25 @@ export default function MedicationLogsScreen() {
 
   const filteredDates = sortedDates.filter((dk) => {
     if (filterType === "all") return true;
-    const { taken, missed } = logsByDate[dk];
-    if (filterType === "taken") return taken.length > 0;
+    const { taken, missed, late } = logsByDate[dk];
+    if (filterType === "taken") return taken.length > 0 || late.length > 0;
     if (filterType === "missed") return missed.length > 0;
     return true;
   });
 
   // ─── Overall stats ────────────────────────────
-  const totalTaken = takenLogs.filter(
-    (l) => l.reminderId !== "quick-take",
+  const totalTaken = reminderStatusLogs.filter(
+    (l) => l.status === "taken" || l.status === "late",
   ).length;
-  const totalMissed = missedLogs.length;
+  const totalMissed = reminderStatusLogs.filter(
+    (l) => l.status === "missed",
+  ).length;
   const overallCompliance = getComplianceRate(totalTaken, totalMissed);
+
+  // ─── Quick-take stats (from legacy taken_logs) ───
+  const quickTakesCount = takenLogs.filter(
+    (l) => l.reminderId === "quick-take",
+  ).length;
 
   // ─── Detail modal data ────────────────────────
   const selectedLogs = selectedDate ? logsByDate[selectedDate] : null;
@@ -253,6 +316,17 @@ export default function MedicationLogsScreen() {
         </View>
       </View>
 
+      {/* Quick Takes Stats (optional) */}
+      {quickTakesCount > 0 && (
+        <View style={styles.quickTakeStats}>
+          <Ionicons name="flash" size={16} color="#8b5cf6" />
+          <Text style={styles.quickTakeStatsText}>
+            {quickTakesCount} as-needed dose{quickTakesCount !== 1 ? "s" : ""}{" "}
+            logged
+          </Text>
+        </View>
+      )}
+
       {/* Filter Tabs */}
       <View style={styles.filterContainer}>
         {(["all", "taken", "missed"] as const).map((f) => (
@@ -288,16 +362,32 @@ export default function MedicationLogsScreen() {
           </View>
         ) : (
           filteredDates.map((dk) => {
-            const { taken, missed } = logsByDate[dk];
-            const scheduledTaken = taken.filter(
-              (l) => l.reminderId !== "quick-take",
-            );
-            const quickTakes = taken.filter(
-              (l) => l.reminderId === "quick-take",
-            );
-            const takenCount = scheduledTaken.length;
+            const { taken, missed, late, notTaken } = logsByDate[dk];
+
+            // Get unique medication IDs for each status
+            const uniqueTakenCount = new Set(
+              [...taken, ...late].map((l) => l.medicationId),
+            ).size;
+            const uniqueMissedCount = new Set(missed.map((l) => l.medicationId))
+              .size;
+            const uniqueNotTakenCount = new Set(
+              notTaken.map((l) => l.medicationId),
+            ).size;
+
+            const uniqueLateCount = new Set(late.map((l) => l.medicationId))
+              .size;
+
+            const totalScheduled =
+              uniqueTakenCount +
+              uniqueLateCount +
+              uniqueMissedCount +
+              uniqueNotTakenCount;
+            const complianceRate =
+              totalScheduled > 0
+                ? getComplianceRate(uniqueTakenCount, uniqueMissedCount)
+                : 100;
             const missedCount = missed.length;
-            const complianceRate = getComplianceRate(takenCount, missedCount);
+            const notTakenCount = notTaken.length;
 
             return (
               <TouchableOpacity
@@ -334,28 +424,30 @@ export default function MedicationLogsScreen() {
                       size={18}
                       color="#10b981"
                     />
-                    <Text style={styles.statItemText}>{takenCount} taken</Text>
+                    <Text style={styles.statItemText}>
+                      {uniqueTakenCount} taken
+                    </Text>
                   </View>
-                  {missedCount > 0 && (
+                  {/* {late.length > 0 && (
+                    <View style={styles.statItem}>
+                      <Ionicons name="time" size={18} color="#f59e0b" />
+                      <Text style={[styles.statItemText, { color: "#f59e0b" }]}>
+                        {uniqueLateCount} late
+                      </Text>
+                    </View>
+                  )}
+                  {uniqueMissedCount > 0 && (
                     <View style={styles.statItem}>
                       <Ionicons name="close-circle" size={18} color="#ef4444" />
                       <Text style={[styles.statItemText, styles.missedText]}>
-                        {missedCount} missed
+                        {uniqueMissedCount} missed
                       </Text>
                     </View>
-                  )}
-                  {quickTakes.length > 0 && (
-                    <View style={styles.statItem}>
-                      <Ionicons name="flash" size={18} color="#8b5cf6" />
-                      <Text style={styles.statItemText}>
-                        {quickTakes.length} as-needed
-                      </Text>
-                    </View>
-                  )}
+                  )} */}
                   <View style={styles.statItem}>
                     <Ionicons name="medical" size={18} color="#3b82f6" />
                     <Text style={styles.statItemText}>
-                      {takenCount + missedCount} scheduled
+                      {totalScheduled} scheduled
                     </Text>
                   </View>
                 </View>
@@ -391,10 +483,10 @@ export default function MedicationLogsScreen() {
           </View>
 
           <ScrollView style={styles.modalContent}>
-            {/* Taken Medications */}
-            {selectedLogs?.taken &&
-              selectedLogs.taken.filter((l) => l.reminderId !== "quick-take")
-                .length > 0 && (
+            {/* Taken Medications (including late) */}
+            {selectedLogs &&
+              (selectedLogs.taken.length > 0 ||
+                selectedLogs.late.length > 0) && (
                 <View style={styles.logSection}>
                   <View style={styles.logSectionHeader}>
                     <Ionicons
@@ -406,34 +498,62 @@ export default function MedicationLogsScreen() {
                       Taken Medications
                     </Text>
                     <Text style={styles.logSectionCount}>
-                      {
-                        selectedLogs.taken.filter(
-                          (l) => l.reminderId !== "quick-take",
-                        ).length
-                      }
+                      {selectedLogs.taken.length + selectedLogs.late.length}
                     </Text>
                   </View>
-                  {selectedLogs.taken
-                    .filter((l) => l.reminderId !== "quick-take")
-                    .map((log) => (
-                      <View key={log.id} style={styles.detailCard}>
-                        <View style={styles.detailCardHeader}>
-                          <Text style={styles.detailMedName}>{log.name}</Text>
-                          <View style={styles.takenBadge}>
-                            <Ionicons
-                              name="checkmark"
-                              size={12}
-                              color="#10b981"
-                            />
-                            <Text style={styles.takenBadgeText}>Taken</Text>
-                          </View>
+
+                  {/* On-time taken */}
+                  {selectedLogs.taken.map((log) => (
+                    <View key={log.id} style={styles.detailCard}>
+                      <View style={styles.detailCardHeader}>
+                        <Text style={styles.detailMedName}>{log.name}</Text>
+                        <View style={styles.takenBadge}>
+                          <Ionicons
+                            name="checkmark"
+                            size={12}
+                            color="#10b981"
+                          />
+                          <Text style={styles.takenBadgeText}>Taken</Text>
+                          {log.takenVariance === "early" && (
+                            <Text
+                              style={[
+                                styles.takenBadgeText,
+                                { color: "#3b82f6" },
+                              ]}
+                            >
+                              · Early
+                            </Text>
+                          )}
                         </View>
-                        <Text style={styles.detailDosage}>{log.dosage}</Text>
-                        <Text style={styles.detailTime}>
-                          Taken at {formatTime(log.takenAt)}
-                        </Text>
                       </View>
-                    ))}
+                      <Text style={styles.detailDosage}>{log.dosage}</Text>
+                      <Text style={styles.detailTime}>
+                        Taken at {formatTime(log.takenAt)} (scheduled{" "}
+                        {formatTime12h(log.scheduledTime)})
+                      </Text>
+                    </View>
+                  ))}
+
+                  {/* Late taken */}
+                  {selectedLogs.late.map((log) => (
+                    <View
+                      key={log.id}
+                      style={[styles.detailCard, styles.lateCard]}
+                    >
+                      <View style={styles.detailCardHeader}>
+                        <Text style={styles.detailMedName}>{log.name}</Text>
+                        <View style={styles.lateBadge}>
+                          <Ionicons name="time" size={12} color="#f59e0b" />
+                          <Text style={styles.lateBadgeText}>Late</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.detailDosage}>{log.dosage}</Text>
+                      <Text style={styles.detailTime}>
+                        Taken at {formatTime(log.takenAt)} (scheduled{" "}
+                        {formatTime12h(log.scheduledTime)})
+                      </Text>
+                    </View>
+                  ))}
                 </View>
               )}
 
@@ -465,53 +585,84 @@ export default function MedicationLogsScreen() {
               </View>
             )}
 
-            {/* As-Needed / Quick Takes */}
-            {selectedLogs?.taken &&
-              selectedLogs.taken.filter((l) => l.reminderId === "quick-take")
-                .length > 0 && (
+            {/* Not Taken (Still Pending) - only show for today/past dates with pending doses */}
+            {selectedLogs?.notTaken && selectedLogs.notTaken.length > 0 && (
+              <View style={styles.logSection}>
+                <View style={styles.logSectionHeader}>
+                  <Ionicons name="time-outline" size={22} color="#94a3b8" />
+                  <Text style={styles.logSectionTitle}>Not Taken</Text>
+                  <Text style={styles.logSectionCount}>
+                    {selectedLogs.notTaken.length}
+                  </Text>
+                </View>
+                {selectedLogs.notTaken.map((item) => (
+                  <View key={item.id} style={styles.detailCard}>
+                    <View style={styles.detailCardHeader}>
+                      <Text style={styles.detailMedName}>{item.name}</Text>
+                      <View style={styles.notTakenBadge}>
+                        <Ionicons
+                          name="time-outline"
+                          size={12}
+                          color="#94a3b8"
+                        />
+                        <Text style={styles.notTakenBadgeText}>Pending</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.detailDosage}>{item.dosage}</Text>
+                    <Text style={styles.detailTime}>
+                      Scheduled at {formatTime12h(item.scheduledTime)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* As-Needed / Quick Takes from legacy logs */}
+            {(() => {
+              const quickTakesForDate = takenLogs.filter(
+                (l) =>
+                  l.dateKey === selectedDate && l.reminderId === "quick-take",
+              );
+              if (quickTakesForDate.length === 0) return null;
+              return (
                 <View style={styles.logSection}>
                   <View style={styles.logSectionHeader}>
                     <Ionicons name="flash" size={22} color="#8b5cf6" />
                     <Text style={styles.logSectionTitle}>As Needed</Text>
                     <Text style={styles.logSectionCount}>
-                      {
-                        selectedLogs.taken.filter(
-                          (l) => l.reminderId === "quick-take",
-                        ).length
-                      }
+                      {quickTakesForDate.length}
                     </Text>
                   </View>
-                  {selectedLogs.taken
-                    .filter((l) => l.reminderId === "quick-take")
-                    .map((log) => (
-                      <View key={log.id} style={styles.detailCard}>
-                        <View style={styles.detailCardHeader}>
-                          <Text style={styles.detailMedName}>{log.name}</Text>
-                          <View
+                  {quickTakesForDate.map((log) => (
+                    <View key={log.id} style={styles.detailCard}>
+                      <View style={styles.detailCardHeader}>
+                        <Text style={styles.detailMedName}>{log.name}</Text>
+                        <View
+                          style={[
+                            styles.takenBadge,
+                            { backgroundColor: "#ede9fe" },
+                          ]}
+                        >
+                          <Ionicons name="flash" size={12} color="#8b5cf6" />
+                          <Text
                             style={[
-                              styles.takenBadge,
-                              { backgroundColor: "#ede9fe" },
+                              styles.takenBadgeText,
+                              { color: "#8b5cf6" },
                             ]}
                           >
-                            <Ionicons name="flash" size={12} color="#8b5cf6" />
-                            <Text
-                              style={[
-                                styles.takenBadgeText,
-                                { color: "#8b5cf6" },
-                              ]}
-                            >
-                              As Needed
-                            </Text>
-                          </View>
+                            As Needed
+                          </Text>
                         </View>
-                        <Text style={styles.detailDosage}>{log.dosage}</Text>
-                        <Text style={styles.detailTime}>
-                          Taken at {formatTime(log.takenAt)}
-                        </Text>
                       </View>
-                    ))}
+                      <Text style={styles.detailDosage}>{log.dosage}</Text>
+                      <Text style={styles.detailTime}>
+                        Taken at {formatTime(log.takenAt)}
+                      </Text>
+                    </View>
+                  ))}
                 </View>
-              )}
+              );
+            })()}
 
             {/* Summary Card */}
             {selectedLogs && (
@@ -521,9 +672,7 @@ export default function MedicationLogsScreen() {
                   <Text style={styles.summaryLabel}>Compliance Rate</Text>
                   <Text style={styles.summaryValue}>
                     {getComplianceRate(
-                      selectedLogs.taken.filter(
-                        (l) => l.reminderId !== "quick-take",
-                      ).length,
+                      selectedLogs.taken.length + selectedLogs.late.length,
                       selectedLogs.missed.length,
                     )}
                     %
@@ -532,19 +681,22 @@ export default function MedicationLogsScreen() {
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Scheduled Total</Text>
                   <Text style={styles.summaryValue}>
-                    {selectedLogs.taken.filter(
-                      (l) => l.reminderId !== "quick-take",
-                    ).length + selectedLogs.missed.length}
+                    {selectedLogs.taken.length +
+                      selectedLogs.late.length +
+                      selectedLogs.missed.length +
+                      selectedLogs.notTaken.length}
                   </Text>
                 </View>
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Taken</Text>
+                  <Text style={styles.summaryLabel}>Taken (On Time)</Text>
                   <Text style={[styles.summaryValue, { color: "#10b981" }]}>
-                    {
-                      selectedLogs.taken.filter(
-                        (l) => l.reminderId !== "quick-take",
-                      ).length
-                    }
+                    {selectedLogs.taken.length}
+                  </Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Taken (Late)</Text>
+                  <Text style={[styles.summaryValue, { color: "#f59e0b" }]}>
+                    {selectedLogs.late.length}
                   </Text>
                 </View>
                 <View style={styles.summaryRow}>
@@ -553,19 +705,12 @@ export default function MedicationLogsScreen() {
                     {selectedLogs.missed.length}
                   </Text>
                 </View>
-                {selectedLogs.taken.filter((l) => l.reminderId === "quick-take")
-                  .length > 0 && (
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>As Needed</Text>
-                    <Text style={[styles.summaryValue, { color: "#8b5cf6" }]}>
-                      {
-                        selectedLogs.taken.filter(
-                          (l) => l.reminderId === "quick-take",
-                        ).length
-                      }
-                    </Text>
-                  </View>
-                )}
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Not Taken</Text>
+                  <Text style={[styles.summaryValue, { color: "#94a3b8" }]}>
+                    {selectedLogs.notTaken.length}
+                  </Text>
+                </View>
               </View>
             )}
           </ScrollView>
@@ -575,203 +720,337 @@ export default function MedicationLogsScreen() {
   );
 }
 
-// ─────────────────────────────────────────────
-// Styles (keep your original styles here)
-// ─────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8fafc" },
+  container: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    gap: 12,
   },
-  loadingText: { color: "#64748b", fontSize: 14 },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#64748b",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#fff",
+    paddingVertical: 16,
+    backgroundColor: "#ffffff",
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: "#e2e8f0",
   },
-  backButton: { width: 40, height: 40, justifyContent: "center" },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
+  backButton: {
+    padding: 4,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a",
+  },
   statsContainer: {
     flexDirection: "row",
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 16,
     gap: 12,
   },
   statCard: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
     borderRadius: 12,
-    padding: 16,
+    paddingVertical: 16,
     alignItems: "center",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  statValue: { fontSize: 24, fontWeight: "700", color: "#0f172a" },
-  statLabel: { fontSize: 12, color: "#64748b", marginTop: 4 },
+  statValue: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#3b82f6",
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#64748b",
+  },
+  quickTakeStats: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: "#ede9fe",
+    borderRadius: 20,
+    alignSelf: "flex-start",
+  },
+  quickTakeStatsText: {
+    fontSize: 12,
+    color: "#8b5cf6",
+    fontWeight: "500",
+  },
   filterContainer: {
     flexDirection: "row",
-    marginHorizontal: 16,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 12,
+    paddingHorizontal: 16,
+    gap: 8,
+    marginBottom: 16,
   },
   filterTab: {
     flex: 1,
     paddingVertical: 8,
     alignItems: "center",
     borderRadius: 8,
+    backgroundColor: "#f1f5f9",
   },
   filterTabActive: {
-    backgroundColor: "#fff",
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    elevation: 2,
+    backgroundColor: "#3b82f6",
   },
-  filterText: { fontSize: 13, color: "#64748b", fontWeight: "500" },
-  filterTextActive: { color: "#0f172a", fontWeight: "700" },
-  content: { flex: 1, paddingHorizontal: 16 },
-  emptyState: { alignItems: "center", paddingVertical: 60, gap: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
+  filterText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#64748b",
+  },
+  filterTextActive: {
+    color: "#ffffff",
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a",
+    marginTop: 16,
+    marginBottom: 8,
+  },
   emptyText: {
     fontSize: 14,
     color: "#64748b",
     textAlign: "center",
-    lineHeight: 20,
   },
   logCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
     padding: 16,
     marginBottom: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   logCardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  logDate: { fontSize: 15, fontWeight: "700", color: "#0f172a" },
+  logDate: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0f172a",
+  },
   complianceBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 20,
+    borderRadius: 12,
   },
-  complianceText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  complianceText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#ffffff",
+  },
   logStats: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 10,
+    gap: 12,
+    marginBottom: 12,
   },
-  statItem: { flexDirection: "row", alignItems: "center", gap: 4 },
-  statItemText: { fontSize: 13, color: "#475569" },
-  missedText: { color: "#ef4444" },
-  viewDetails: { marginTop: 4 },
-  viewDetailsText: { fontSize: 12, color: "#94a3b8" },
-  // Modal
-  modalContainer: { flex: 1, backgroundColor: "#f8fafc" },
+  statItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  statItemText: {
+    fontSize: 13,
+    color: "#64748b",
+  },
+  missedText: {
+    color: "#ef4444",
+  },
+  viewDetails: {
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    paddingTop: 12,
+    marginTop: 4,
+  },
+  viewDetailsText: {
+    fontSize: 13,
+    color: "#3b82f6",
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+  },
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 16,
-    backgroundColor: "#fff",
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: "#ffffff",
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: "#e2e8f0",
   },
-  modalTitle: { fontSize: 17, fontWeight: "700", color: "#0f172a" },
-  modalContent: { flex: 1, padding: 16 },
-  logSection: { marginBottom: 20 },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f172a",
+  },
+  modalContent: {
+    padding: 16,
+  },
+  logSection: {
+    marginBottom: 24,
+  },
   logSectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 12,
   },
   logSectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "600",
     color: "#0f172a",
     flex: 1,
   },
   logSectionCount: {
-    fontSize: 13,
+    fontSize: 14,
+    fontWeight: "600",
     color: "#64748b",
     backgroundColor: "#f1f5f9",
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 10,
+    borderRadius: 12,
   },
   detailCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    padding: 12,
     marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  lateCard: {
+    backgroundColor: "#fef3c7",
+    borderColor: "#fde68a",
   },
   detailCardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: 6,
   },
-  detailMedName: { fontSize: 15, fontWeight: "600", color: "#0f172a", flex: 1 },
-  detailDosage: { fontSize: 13, color: "#64748b", marginBottom: 4 },
-  detailTime: { fontSize: 12, color: "#94a3b8" },
+  detailMedName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0f172a",
+    flex: 1,
+  },
   takenBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
-    backgroundColor: "#dcfce7",
+    gap: 4,
+    backgroundColor: "#d1fae5",
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 20,
+    paddingVertical: 2,
+    borderRadius: 12,
   },
-  takenBadgeText: { fontSize: 11, color: "#10b981", fontWeight: "600" },
+  takenBadgeText: {
+    fontSize: 11,
+    color: "#10b981",
+    fontWeight: "500",
+  },
+  lateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#fed7aa",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  lateBadgeText: {
+    fontSize: 11,
+    color: "#f59e0b",
+    fontWeight: "500",
+  },
   missedBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
+    gap: 4,
     backgroundColor: "#fee2e2",
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 20,
+    paddingVertical: 2,
+    borderRadius: 12,
   },
-  missedBadgeText: { fontSize: 11, color: "#ef4444", fontWeight: "600" },
+  missedBadgeText: {
+    fontSize: 11,
+    color: "#ef4444",
+    fontWeight: "500",
+  },
+  notTakenBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  notTakenBadgeText: {
+    fontSize: 11,
+    color: "#94a3b8",
+    fontWeight: "500",
+  },
+  detailDosage: {
+    fontSize: 13,
+    color: "#64748b",
+    marginBottom: 6,
+  },
+  detailTime: {
+    fontSize: 12,
+    color: "#94a3b8",
+  },
   summaryCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
     padding: 16,
-    marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    marginTop: 8,
+    marginBottom: 32,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
   },
   summaryTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "600",
     color: "#0f172a",
     marginBottom: 12,
   },
@@ -780,8 +1059,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: "#e2e8f0",
   },
-  summaryLabel: { fontSize: 14, color: "#64748b" },
-  summaryValue: { fontSize: 14, fontWeight: "700", color: "#0f172a" },
+  summaryLabel: {
+    fontSize: 14,
+    color: "#64748b",
+  },
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0f172a",
+  },
 });
