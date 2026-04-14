@@ -1,12 +1,16 @@
 // contexts/NotificationContext.tsx
-import * as Notifications from "expo-notifications";
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { AppState } from "react-native";
+import React, {
+    createContext,
+    useContext,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
+import { AppState, Platform } from "react-native";
 import { useAuth } from "../hooks/useAuth";
 import {
     registerForPushNotificationsAsync,
     savePushTokenToFirestore,
-    sendLocalNotification,
 } from "../lib/notifications";
 
 interface Notification {
@@ -46,19 +50,34 @@ export const useNotifications = () => {
   return context;
 };
 
+// ✅ UNIQUE ID GENERATOR
+const generateId = () =>
+  `${Date.now()}_${Math.random().toString(36).slice(2)}_${Platform.OS}`;
+
+// ✅ Notification types allowed per role
+
+const CAREGIVER_ALLOWED_TYPES = ["patient-missed", "caregiver-request"];
+
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { user } = useAuth();
+  const { user, userRole } = useAuth(); // 👈 pull userRole from auth
+
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showInApp, setShowInApp] = useState(true);
   const [appState, setAppState] = useState(AppState.currentState);
 
+  const hasRegistered = useRef(false);
+  const dedupeRef = useRef<Set<string>>(new Set());
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  // Register for push notifications
+  // ----------------------------
+  // PUSH NOTIFICATION REGISTRATION
+  // ----------------------------
   useEffect(() => {
-    if (user) {
+    if (user && !hasRegistered.current) {
+      hasRegistered.current = true;
       registerForPushNotificationsAsync().then((token) => {
         if (token) {
           savePushTokenToFirestore(user.uid, token);
@@ -67,54 +86,52 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [user]);
 
-  // Handle app state changes
+  // ----------------------------
+  // APP STATE LISTENER
+  // ----------------------------
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", (nextAppState) => {
-      setAppState(nextAppState);
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      setAppState(nextState);
     });
     return () => subscription.remove();
   }, []);
 
-  // Handle incoming notifications
-  useEffect(() => {
-    const subscription = Notifications.addNotificationReceivedListener(
-      (notification) => {
-        const { title, body, data } = notification.request.content;
-
-        addNotification({
-          title: title || "Notification",
-          message: body || "",
-          type: data?.type || "info",
-          data,
-        });
-      },
-    );
-
-    return () => subscription.remove();
-  }, []);
-
+  // ----------------------------
+  // ADD NOTIFICATION
+  // ----------------------------
   const addNotification = (
     notification: Omit<Notification, "id" | "timestamp" | "read">,
   ) => {
+    // 🚫 Caregivers only receive patient-related notifications
+
+    if (userRole === "caregiver") {
+      const notifType = notification.data?.type;
+
+      if (!CAREGIVER_ALLOWED_TYPES.includes(notifType)) return;
+    }
+
+    // 🔥 Dedupe key (prevents duplicates from loops/services)
+    const dedupeKey = `${notification.title}_${notification.message}`;
+    if (dedupeRef.current.has(dedupeKey)) return;
+
+    dedupeRef.current.add(dedupeKey);
+    setTimeout(() => {
+      dedupeRef.current.delete(dedupeKey);
+    }, 10000);
+
     const newNotification: Notification = {
       ...notification,
-      id: Date.now().toString(),
+      id: generateId(),
       timestamp: new Date(),
       read: false,
     };
 
     setNotifications((prev) => [newNotification, ...prev]);
-
-    // Show local notification if app is in background
-    if (appState !== "active") {
-      sendLocalNotification(
-        notification.title,
-        notification.message,
-        notification.data,
-      );
-    }
   };
 
+  // ----------------------------
+  // MARK AS READ
+  // ----------------------------
   const markAsRead = (id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
@@ -127,8 +144,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const clearNotifications = () => {
     setNotifications([]);
+    dedupeRef.current.clear();
   };
 
+  // ----------------------------
+  // PROVIDER
+  // ----------------------------
   return (
     <NotificationContext.Provider
       value={{

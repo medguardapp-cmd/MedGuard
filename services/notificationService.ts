@@ -49,10 +49,23 @@ export const checkMissedAndLateDoses = async (
 
     for (const time of reminder.times || ["08:00"]) {
       const [hours, minutes] = time.split(":").map(Number);
-      const scheduledMinutes = hours * 60 + minutes;
-      const diff = currentMinutes - scheduledMinutes;
 
-      // Check if already taken
+      const scheduledDateTime = new Date();
+      scheduledDateTime.setHours(hours, minutes, 0, 0);
+
+      const now = new Date();
+      const isToday = scheduledDateTime.toDateString() === now.toDateString();
+
+      if (!isToday) continue;
+
+      // 🚫 Ignore if scheduled time is in the future
+      if (scheduledDateTime > now) continue;
+
+      const diffMinutes = Math.floor(
+        (now.getTime() - scheduledDateTime.getTime()) / 60000,
+      );
+
+      // Only check TODAY logs
       const isTaken = todayTaken.some(
         (log) =>
           log.reminderId === reminder.id ||
@@ -61,38 +74,40 @@ export const checkMissedAndLateDoses = async (
 
       if (isTaken) continue;
 
-      const key = `${reminder.id}_${time}`;
+      const key = `${reminder.id}_${time}_${todayKey}`;
 
-      // Late notification (15-60 minutes late)
-      if (diff >= 15 && diff < 60 && !notifiedLateRef.current.has(key)) {
+      // 🚫 Prevent duplicate notifications per day
+      if (
+        notifiedLateRef.current.has(key) ||
+        notifiedMissedRef.current.has(key)
+      ) {
+        continue;
+      }
+
+      // ✅ Late (15–59 min)
+      if (diffMinutes >= 15 && diffMinutes < 60) {
         notifiedLateRef.current.add(key);
+
         addNotification({
           title: "⏰ Dose Late",
           message: `${reminder.medicationName} (${reminder.medicationDosage}) was scheduled for ${formatTime12h(time)}`,
           type: "warning",
           data: { reminderId: reminder.id, type: "late" },
         });
-        await sendLocalNotification(
-          "⏰ Medication Late",
-          `${reminder.medicationName} is ${Math.floor(diff)} minutes late. Take it soon!`,
-          { reminderId: reminder.id, type: "late" },
-        );
+
+        continue;
       }
 
-      // Missed notification (60+ minutes late)
-      if (diff >= 60 && !notifiedMissedRef.current.has(key)) {
+      // ✅ Missed (60+ min ONLY TODAY)
+      if (diffMinutes >= 60) {
         notifiedMissedRef.current.add(key);
+
         addNotification({
           title: "❌ Dose Missed",
           message: `You missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)}`,
           type: "error",
           data: { reminderId: reminder.id, type: "missed" },
         });
-        await sendLocalNotification(
-          "❌ Medication Missed",
-          `You missed ${reminder.medicationName}. Please take it as soon as possible.`,
-          { reminderId: reminder.id, type: "missed" },
-        );
       }
     }
   }
@@ -278,8 +293,19 @@ export const checkCaregiverPatientMissedDoses = async (
       for (const reminder of reminders) {
         for (const time of reminder.times || ["08:00"]) {
           const [hours, minutes] = time.split(":").map(Number);
-          const scheduledMinutes = hours * 60 + minutes;
-          const diff = currentMinutes - scheduledMinutes;
+          const scheduledDateTime = new Date();
+          scheduledDateTime.setHours(hours, minutes, 0, 0);
+
+          const now = new Date();
+          const isToday =
+            scheduledDateTime.toDateString() === now.toDateString();
+
+          if (!isToday) continue;
+          if (scheduledDateTime > now) continue;
+
+          const diffMinutes = Math.floor(
+            (now.getTime() - scheduledDateTime.getTime()) / 60000,
+          );
 
           const isTaken = takenLogs.some(
             (log) =>
@@ -287,14 +313,16 @@ export const checkCaregiverPatientMissedDoses = async (
               log.reminderId === `${reminder.id}_${time}`,
           );
 
-          const missedKey = `${patient.id}_${reminder.id}_${time}`;
+          const missedKey = `${patient.id}_${reminder.id}_${time}_${todayKey}`;
 
           // Notify caregiver if patient missed dose (60+ minutes late)
-          if (
-            !isTaken &&
-            diff >= 60 &&
-            !caregiverNotifiedMissedRef.current.has(missedKey)
-          ) {
+          if (isTaken) continue;
+
+          // 🚫 prevent duplicate per day
+          if (caregiverNotifiedMissedRef.current.has(missedKey)) continue;
+
+          // ✅ missed today only
+          if (diffMinutes >= 60) {
             caregiverNotifiedMissedRef.current.add(missedKey);
             addNotification({
               title: "⚠️ Patient Missed Dose",

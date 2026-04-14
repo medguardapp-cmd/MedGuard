@@ -12,10 +12,17 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -47,6 +54,19 @@ import {
   checkMissedAndLateDoses,
   checkSevereInteractions,
 } from "../../services/notificationService";
+
+const originalConsoleLog = console.log;
+console.log = (...args) => {
+  // Skip the markAsTaken check logs
+  if (
+    args[0] &&
+    typeof args[0] === "string" &&
+    args[0].includes("markAsTaken check")
+  ) {
+    return;
+  }
+  originalConsoleLog(...args);
+};
 const DAY_WIDTH = 50;
 
 // ─────────────────────────────────────────────
@@ -667,10 +687,14 @@ export default function HomeScreen() {
     caregiverId: userType === "caregiver" ? auth.currentUser?.uid || "" : "",
   });
 
-  const safeCan = {
-    markAsTaken: () =>
-      userType === "caregiver" ? (can?.markAsTaken() ?? false) : true,
-  };
+  // ✅ Memoize this to prevent recreation on every render
+  const safeCan = useMemo(
+    () => ({
+      markAsTaken: () =>
+        userType === "caregiver" ? (can?.markAsTaken() ?? false) : true,
+    }),
+    [userType, can],
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => scrollToToday(), 100);
@@ -1084,12 +1108,26 @@ export default function HomeScreen() {
       return;
     }
 
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+
+    if (!targetUserId) {
+      Alert.alert("Error", "Could not determine the target user");
+      return;
+    }
+
+    console.log("🎯 Target user ID:", targetUserId);
+    console.log("User type:", userType);
 
     const dk = dateKey(selectedDate);
     const logId = getReminderLogId(item.reminderId, item.time, dk);
-    const logRef = doc(db, "users", userId, "reminder_status_logs", logId);
+    const logRef = doc(
+      db,
+      "users",
+      targetUserId,
+      "reminder_status_logs",
+      logId,
+    ); // ✅ Use targetUserId
 
     if (item.taken && item.takenLogId) {
       // Undo logic - update BOTH collections
@@ -1111,7 +1149,7 @@ export default function HomeScreen() {
               });
               // Delete from taken_logs
               await deleteDoc(
-                doc(db, "users", userId, "taken_logs", item.takenLogId!),
+                doc(db, "users", targetUserId, "taken_logs", item.takenLogId!), // ✅ Use targetUserId
               );
             },
           },
@@ -1140,7 +1178,8 @@ export default function HomeScreen() {
 
       // ALSO keep taken_logs for backward compatibility
       const timeSpecificReminderId = `${item.reminderId}_${item.time}`;
-      await addDoc(collection(db, "users", userId, "taken_logs"), {
+      await addDoc(collection(db, "users", targetUserId, "taken_logs"), {
+        // ✅ Use targetUserId
         medicationId: item.medicationId,
         reminderId: timeSpecificReminderId,
         name: item.name,

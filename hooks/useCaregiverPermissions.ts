@@ -1,5 +1,5 @@
 // hooks/useCaregiverPermissions.ts
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { db } from "../lib/firebase";
 import { CaregiverPermissions } from "../types/caregiver";
@@ -20,58 +20,61 @@ export const useCaregiverPermissions = ({
   const [hasAccess, setHasAccess] = useState(false);
 
   useEffect(() => {
-    const fetchPermissions = async () => {
-      if (!patientId || !caregiverId) {
-        setLoading(false);
-        return;
-      }
+    if (!patientId || !caregiverId) {
+      setLoading(false);
+      return;
+    }
 
-      try {
-        const connectionsRef = collection(db, "caregiver_connections");
-        const q = query(
-          connectionsRef,
-          where("patientId", "==", patientId),
-          where("caregiverId", "==", caregiverId),
-          where("status", "==", "approved"),
-        );
+    // ✅ Use real-time listener instead of one-time fetch
+    const connectionsRef = collection(db, "caregiver_connections");
+    const q = query(
+      connectionsRef,
+      where("patientId", "==", patientId),
+      where("caregiverId", "==", caregiverId),
+      where("status", "==", "approved"),
+    );
 
-        const snapshot = await getDocs(q);
-
+    // Set up real-time listener
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         if (!snapshot.empty) {
           const connection = snapshot.docs[0].data();
           const perms = connection.permissions as CaregiverPermissions;
+
+          console.log("✅ Permissions loaded:", perms); // Debug log
+
           setPermissions(perms);
           setHasAccess(true);
         } else {
+          console.log("❌ No connection found");
           setPermissions(null);
           setHasAccess(false);
         }
-      } catch (error) {
+        setLoading(false);
+      },
+      (error) => {
         console.error("Error fetching permissions:", error);
         setPermissions(null);
         setHasAccess(false);
-      } finally {
         setLoading(false);
-      }
-    };
+      },
+    );
 
-    fetchPermissions();
+    // Cleanup subscription
+    return () => unsubscribe();
   }, [patientId, caregiverId]);
 
-  // ✅ FIXED: Map to your 3 actual permission fields
   const can = {
-    // All medication management uses canManageReminders
     addMedications: () => permissions?.canManageReminders ?? false,
     editMedications: () => permissions?.canManageReminders ?? false,
     deleteMedications: () => permissions?.canManageReminders ?? false,
-
-    // Reminders
     manageReminders: () => permissions?.canManageReminders ?? false,
-
-    // Adherence
-    markAsTaken: () => permissions?.canMarkAsTaken ?? false,
-
-    // Health Records
+    markAsTaken: () => {
+      const result = permissions?.canMarkAsTaken ?? false;
+      console.log("🔍 markAsTaken check:", { permissions, result }); // Debug log
+      return result;
+    },
     manageHealth: () => permissions?.canManageHealth ?? false,
   };
 
