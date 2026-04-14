@@ -1,12 +1,12 @@
 // services/reminderAlarmService.ts
 import * as Notifications from "expo-notifications";
 
-// Configure notification handler for alarms
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true, // ✅ replaces shouldShowAlert
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowList: true, // ✅ for Android notification drawer
     priority: Notifications.AndroidNotificationPriority.HIGH,
   }),
 });

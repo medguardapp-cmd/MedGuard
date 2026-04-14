@@ -1,5 +1,6 @@
 // app/(tabs)/medication-logs.tsx
 import Colors from "@/constants/colors";
+import { useSelectedPatient } from "@/contexts/SelectedPatientContext";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
@@ -110,9 +111,15 @@ const getComplianceRate = (taken: number, missed: number): number => {
 // ─────────────────────────────────────────────
 export default function MedicationLogsScreen() {
   const router = useRouter();
+  const { selectedPatientId, userType } = useSelectedPatient();
+
+  // ✅ Get the correct user ID (patient for caregiver, self for patient)
+  const targetUserId =
+    userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
   const [reminderStatusLogs, setReminderStatusLogs] = useState<
     ReminderStatusLog[]
   >([]);
+
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
   const [missedLogs, setMissedLogs] = useState<MissedLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,8 +133,7 @@ export default function MedicationLogsScreen() {
 
   // ─── Firebase listeners ───────────────────────
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) {
+    if (!targetUserId) {
       setLoading(false);
       return;
     }
@@ -143,7 +149,7 @@ export default function MedicationLogsScreen() {
     // Listen to reminder_status_logs (primary source)
     const unsubStatus = onSnapshot(
       query(
-        collection(db, "users", userId, "reminder_status_logs"),
+        collection(db, "users", targetUserId, "reminder_status_logs"),
         orderBy("updatedAt", "desc"),
       ),
       (snap) => {
@@ -161,7 +167,7 @@ export default function MedicationLogsScreen() {
     // Keep taken_logs for backward compatibility and quick-takes
     const unsubTaken = onSnapshot(
       query(
-        collection(db, "users", userId, "taken_logs"),
+        collection(db, "users", targetUserId, "taken_logs"),
         orderBy("takenAt", "desc"),
       ),
       (snap) => {
@@ -175,7 +181,7 @@ export default function MedicationLogsScreen() {
 
     const unsubMissed = onSnapshot(
       query(
-        collection(db, "users", userId, "missed_logs"),
+        collection(db, "users", targetUserId, "missed_logs"),
         orderBy("missedAt", "desc"),
       ),
       (snap) => {
@@ -378,11 +384,14 @@ export default function MedicationLogsScreen() {
             const uniqueLateCount = new Set(late.map((l) => l.medicationId))
               .size;
 
-            const totalScheduled =
-              uniqueTakenCount +
-              uniqueLateCount +
-              uniqueMissedCount +
-              uniqueNotTakenCount;
+            const allUniqueMedIds = new Set([
+              ...taken.map((l) => l.medicationId),
+              ...late.map((l) => l.medicationId),
+              ...missed.map((l) => l.medicationId),
+              ...notTaken.map((l) => l.medicationId),
+            ]);
+
+            const totalScheduled = allUniqueMedIds.size;
             const complianceRate =
               totalScheduled > 0
                 ? getComplianceRate(uniqueTakenCount, uniqueMissedCount)
@@ -670,24 +679,19 @@ export default function MedicationLogsScreen() {
               <View style={styles.summaryCard}>
                 <Text style={styles.summaryTitle}>Daily Summary</Text>
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Compliance Rate</Text>
-                  <Text style={styles.summaryValue}>
-                    {getComplianceRate(
-                      selectedLogs.taken.length + selectedLogs.late.length,
-                      selectedLogs.missed.length,
-                    )}
-                    %
-                  </Text>
-                </View>
-                <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Scheduled Total</Text>
                   <Text style={styles.summaryValue}>
-                    {selectedLogs.taken.length +
-                      selectedLogs.late.length +
-                      selectedLogs.missed.length +
-                      selectedLogs.notTaken.length}
+                    {
+                      new Set([
+                        ...selectedLogs.taken.map((l) => l.medicationId),
+                        ...selectedLogs.late.map((l) => l.medicationId),
+                        ...selectedLogs.missed.map((l) => l.medicationId),
+                        ...selectedLogs.notTaken.map((l) => l.medicationId),
+                      ]).size
+                    }
                   </Text>
                 </View>
+
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Taken (On Time)</Text>
                   <Text style={[styles.summaryValue, { color: "#10b981" }]}>

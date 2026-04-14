@@ -1,4 +1,5 @@
 // app/(tabs)/more.tsx
+import { useSelectedPatient } from "@/contexts/SelectedPatientContext";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { signOut } from "firebase/auth";
@@ -17,9 +18,10 @@ import { useAuth } from "../../hooks/useAuth";
 import { auth } from "../../lib/firebase";
 
 export default function MoreScreen() {
+  const { selectedPatientId, userType } = useSelectedPatient();
+  const { user } = useAuth();
   const router = useRouter();
   const { data } = useOnboarding();
-  const { user } = useAuth();
 
   const handleLogout = async () => {
     Alert.alert(
@@ -104,12 +106,31 @@ export default function MoreScreen() {
         <View style={styles.section}>
           <TouchableOpacity
             style={styles.navButton}
-            onPress={() => router.push("/patient-info")} // Changed: removed (tabs) from path
+            onPress={() => {
+              const patientId =
+                userType === "caregiver" ? selectedPatientId : user?.uid;
+
+              if (!patientId) {
+                Alert.alert(
+                  "No patient selected",
+                  userType === "caregiver"
+                    ? "Please select a patient first."
+                    : "Unable to load your profile.",
+                );
+                return;
+              }
+
+              router.push({
+                pathname: "/patient-info",
+                params: { patientId },
+              });
+            }}
           >
             <View style={styles.navButtonLeft}>
               <View style={styles.navButtonIcon}>
                 <Ionicons name="medical-outline" size={24} color="#3b82f6" />
               </View>
+
               <View>
                 <Text style={styles.navButtonTitle}>Patient Information</Text>
                 <Text style={styles.navButtonSubtitle}>
@@ -117,6 +138,7 @@ export default function MoreScreen() {
                 </Text>
               </View>
             </View>
+
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
         </View>

@@ -1,5 +1,6 @@
 // app/_layout.tsx
 import { NotificationProvider } from "@/contexts/NotificationContext";
+import { SelectedPatientProvider } from "@/contexts/SelectedPatientContext";
 import * as Notifications from "expo-notifications";
 import { Slot, SplashScreen, useRouter, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
@@ -11,7 +12,7 @@ import {
   query,
   serverTimestamp,
   updateDoc,
-  where,
+  where
 } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
@@ -30,6 +31,7 @@ import {
   handleNotificationResponse,
   scheduleSnoozeAlarm,
 } from "../services/reminderAlarmService";
+
 
 const ONBOARDING_COMPLETED_KEY = "@medguard_onboarding_completed";
 
@@ -50,7 +52,6 @@ function RootLayoutNav() {
       await setupNotificationChannel();
       await requestNotificationPermissions();
       await registerBackgroundTask();
-      await setupNotificationCategories(); // ✅ Add this line
     };
 
     setupNotifications();
@@ -69,7 +70,6 @@ function RootLayoutNav() {
         }
       });
 
-    // ✅ UPDATED: Handle notification responses with action buttons
     notificationResponseSub.current =
       Notifications.addNotificationResponseReceivedListener(
         async (response) => {
@@ -78,15 +78,12 @@ function RootLayoutNav() {
 
           await handleNotificationResponse(
             response,
-            // TAKE action - mark medication as taken
             async (id) => {
               const userId = auth.currentUser?.uid;
               if (userId && id) {
                 const dk = new Date().toDateString();
                 try {
-                  // Extract the base reminder ID (remove time suffix)
                   const baseReminderId = id.split("_").slice(0, 2).join("_");
-
                   await addDoc(collection(db, "users", userId, "taken_logs"), {
                     medicationId: id,
                     reminderId: baseReminderId,
@@ -95,7 +92,6 @@ function RootLayoutNav() {
                     takenAt: serverTimestamp(),
                     dateKey: dk,
                   });
-
                   console.log(
                     "✅ Medication marked as taken from notification",
                   );
@@ -104,7 +100,6 @@ function RootLayoutNav() {
                 }
               }
             },
-            // SNOOZE action - schedule snooze for 10 minutes
             async (id) => {
               console.log("⏰ Snoozing reminder:", id);
               await scheduleSnoozeAlarm(
@@ -114,7 +109,6 @@ function RootLayoutNav() {
                 10,
               );
             },
-            // SKIP action - cancel the alarm
             async (id) => {
               console.log("❌ Skipping reminder:", id);
               await cancelMedicationAlarm(id);
@@ -140,7 +134,6 @@ function RootLayoutNav() {
 
           if (user) {
             if (user.emailVerified) {
-              // Wait for onboarding context to load
               if (onboardingLoading) {
                 console.log("⏳ Waiting for onboarding context to load...");
                 return;
@@ -150,10 +143,8 @@ function RootLayoutNav() {
               console.log("👤 User type:", data?.userData?.userType);
               console.log("📍 Current route:", currentRoute);
 
-              // Get user type from context
               const userType = data?.userData?.userType || "patient";
 
-              // Check if caregiver has patients
               let hasPatients = true;
               if (userType === "caregiver") {
                 try {
@@ -171,48 +162,39 @@ function RootLayoutNav() {
                 }
               }
 
-              // ─── ROUTING LOGIC ────────────────────────────────
+              // ✅ List of routes that are outside the tabs (modals, etc.)
+              const outsideTabRoutes = [
+                "patient-info",
+                "edit-profile",
+                "caregiver",
+                "notifications",
+                "medication-logs",
+              ];
+
+              const isOutsideTabRoute = outsideTabRoutes.includes(currentRoute);
+
               if (isCompleted === true) {
-                // ONLY caregivers with NO patients go to caregiver-only layout
                 if (userType === "caregiver" && hasPatients === false) {
-                  console.log(
-                    "🔒 Caregiver with 0 patients - redirecting to caregiver-only layout",
-                  );
                   if (currentRoute !== "(caregiver-only)") {
                     router.replace("/(caregiver-only)/connect");
                   }
-                }
-                // ALL OTHER users (patients AND caregivers with patients) go to main tabs
-                else {
-                  console.log(
-                    "✅ User has access to main app - redirecting to tabs",
-                  );
-                  if (currentRoute !== "(tabs)") {
+                } else {
+                  // ✅ Only redirect to tabs if we're not on an outside-tab route
+                  if (!isOutsideTabRoute && currentRoute !== "(tabs)") {
                     router.replace("/(tabs)");
                   }
                 }
-              }
-              // Not onboarded yet
-              else {
-                console.log("📝 User not onboarded - redirecting to stepper");
+              } else {
                 if (currentRoute !== "(onboarding)") {
                   router.replace("/(onboarding)/stepper");
                 }
               }
-            }
-            // Email not verified
-            else {
-              console.log(
-                "📧 Email not verified - redirecting to verify-email",
-              );
+            } else {
               if (currentRoute !== "(auth)") {
                 router.replace("/(auth)/verify-email");
               }
             }
-          }
-          // Not logged in
-          else {
-            console.log("🚪 Not logged in - redirecting to onboarding");
+          } else {
             if (currentRoute !== "(auth)") {
               router.replace("/(auth)/onboarding");
             }
@@ -232,7 +214,7 @@ function RootLayoutNav() {
     };
 
     checkAuthAndOnboarding();
-  }, [isCompleted, onboardingLoading, data?.userData?.userType]);
+  }, [isCompleted, onboardingLoading, data?.userData?.userType, segments]);
 
   if (!isReady || onboardingLoading) {
     return (
@@ -250,7 +232,9 @@ export default function RootLayout() {
   return (
     <OnboardingProvider>
       <NotificationProvider>
-        <RootLayoutNav />
+        <SelectedPatientProvider>
+          <RootLayoutNav />
+        </SelectedPatientProvider>
       </NotificationProvider>
     </OnboardingProvider>
   );

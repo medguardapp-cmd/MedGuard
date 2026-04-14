@@ -1,8 +1,10 @@
-// app/(tabs)/patient-info.tsx
+// app/patient-info.tsx
+import { useOnboarding } from "@/contexts/OnboardingContext";
+import { useAuth } from "@/hooks/useAuth";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { doc, updateDoc } from "firebase/firestore";
-import React, { useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   Modal,
@@ -14,13 +16,50 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useOnboarding } from "../contexts/OnboardingContext";
-import { useAuth } from "../hooks/useAuth";
+import {
+  SelectedPatientProvider,
+  useSelectedPatient,
+} from "../contexts/SelectedPatientContext";
+import { useCaregiverPermissions } from "../hooks/useCaregiverPermissions";
 import { db } from "../lib/firebase";
-export default function PatientInfoScreen() {
+
+// Inner component that uses the hooks
+function PatientInfoContent() {
   const router = useRouter();
   const { data } = useOnboarding();
-  const { user } = useAuth(); // Get current user
+  const { user } = useAuth();
+  const { patientId: patientIdParam } = useLocalSearchParams<{
+    patientId: string;
+  }>();
+  const { selectedPatientId, setSelectedPatientId, userType } =
+    useSelectedPatient();
+
+  useEffect(() => {
+    if (patientIdParam) {
+      setSelectedPatientId(patientIdParam);
+    }
+    return () => setSelectedPatientId(null);
+  }, [patientIdParam, setSelectedPatientId]);
+
+  // Use param directly — don't wait for context state to update
+
+  // Get the correct user ID
+  const targetUserId =
+    userType === "caregiver"
+      ? patientIdParam // ALWAYS use param
+      : user?.uid;
+
+  const { can, loading: permissionsLoading } = useCaregiverPermissions({
+    patientId: userType === "caregiver" ? patientIdParam || "" : "",
+    caregiverId: userType === "caregiver" ? user?.uid || "" : "",
+  });
+
+  // Determine if user can edit (patients always can, caregivers need permission)
+  const canEdit =
+    userType === "patient" ? true : (can?.manageHealth() ?? false);
+  const canView =
+    userType === "patient" ? true : (can?.manageHealth() ?? false);
+
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showBloodTypePicker, setShowBloodTypePicker] = useState(false);
@@ -38,24 +77,32 @@ export default function PatientInfoScreen() {
     "Unknown",
   ];
 
-  // Form state
+  // Separate state for personal info (read-only display)
+  const [patientProfile, setPatientProfile] = useState({
+    name: "",
+    dateOfBirth: "",
+    gender: "",
+  });
+
+  // Form state for editable medical data
   const [formData, setFormData] = useState({
-    bloodType: data.medicalData.bloodType || "",
-    height: data.medicalData.height || "",
-    weight: data.medicalData.weight || "",
-    drugAllergies: data.medicalData.drugAllergies || [],
-    allergies: data.medicalData.allergies || [],
-    conditions: data.medicalData.conditions || [],
-    isPregnant: data.medicalData.isPregnant || false,
-    isBreastfeeding: data.medicalData.isBreastfeeding || false,
-    dueDate: data.medicalData.dueDate || "",
-    pregnancyNotes: data.medicalData.pregnancyNotes || "",
-    smokingStatus: data.medicalData.smokingStatus || "",
-    alcoholConsumption: data.medicalData.alcoholConsumption || "",
-    exerciseFrequency: data.medicalData.exerciseFrequency || "",
-    dietaryPreferences: data.medicalData.dietaryPreferences || "",
-    lifestyleNotes: data.medicalData.lifestyleNotes || "",
-    notes: data.medicalData.notes || "",
+    bloodType: "",
+    height: "",
+    weight: "",
+    drugAllergies: [] as string[],
+    allergies: [] as string[],
+    conditions: [] as string[],
+    isPregnant: false,
+    isBreastfeeding: false,
+    dueDate: "",
+    pregnancyNotes: "",
+    smokingStatus: "",
+    alcoholConsumption: "",
+    exerciseFrequency: "",
+    dietaryPreferences: "",
+    lifestyleNotes: "",
+    notes: "",
+    updatedAt: null as any,
   });
 
   // Temporary state for adding new items
@@ -63,19 +110,117 @@ export default function PatientInfoScreen() {
   const [newAllergy, setNewAllergy] = useState("");
   const [newCondition, setNewCondition] = useState("");
 
-  // Check if user is female to show pregnancy info
-  const isFemale = data.userData.gender?.toLowerCase() === "female";
+  // Fetch patient data — from context if patient, from Firestore if caregiver
+  useEffect(() => {
+    const fetchPatientData = async () => {
+      console.log("DEBUG:", {
+        userType,
+        patientIdParam,
+        targetUserId,
+      });
+      // 🚫 STOP if caregiver but no patientId yet
+      if (userType === "caregiver" && !patientIdParam) {
+        return;
+      }
+
+      if (!targetUserId) return;
+
+      // AFTER — only use onboarding context when patient is viewing their OWN data
+      if (userType === "patient" && !patientIdParam) {
+        setPatientProfile({
+          name: data.userData.name || "",
+          dateOfBirth: data.userData.dateOfBirth || "",
+          gender: data.userData.gender || "",
+        });
+        setFormData({
+          bloodType: data.medicalData.bloodType || "",
+          height: data.medicalData.height || "",
+          weight: data.medicalData.weight || "",
+          drugAllergies: data.medicalData.drugAllergies || [],
+          allergies: data.medicalData.allergies || [],
+          conditions: data.medicalData.conditions || [],
+          isPregnant: data.medicalData.isPregnant || false,
+          isBreastfeeding: data.medicalData.isBreastfeeding || false,
+          dueDate: data.medicalData.dueDate || "",
+          pregnancyNotes: data.medicalData.pregnancyNotes || "",
+          smokingStatus: data.medicalData.smokingStatus || "",
+          alcoholConsumption: data.medicalData.alcoholConsumption || "",
+          exerciseFrequency: data.medicalData.exerciseFrequency || "",
+          dietaryPreferences: data.medicalData.dietaryPreferences || "",
+          lifestyleNotes: data.medicalData.lifestyleNotes || "",
+          notes: data.medicalData.notes || "",
+          updatedAt: data.medicalData.updatedAt || null,
+        });
+        return;
+      }
+
+      // Caregiver: fetch the patient's Firestore document directly
+      try {
+        const userRef = doc(db, "users", targetUserId);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists()) {
+          const userData = userSnap.data();
+          const md = userData.medicalData || {};
+          const ud = userData.userData || {};
+
+          setPatientProfile({
+            name: ud.name || userData.name || "",
+            dateOfBirth: ud.dateOfBirth || userData.dateOfBirth || "",
+            gender: ud.gender || userData.gender || "",
+          });
+
+          setFormData({
+            bloodType: md.bloodType || "",
+            height: md.height || "",
+            weight: md.weight || "",
+            drugAllergies: md.drugAllergies || [],
+            allergies: md.allergies || [],
+            conditions: md.conditions || [],
+            isPregnant: md.isPregnant || false,
+            isBreastfeeding: md.isBreastfeeding || false,
+            dueDate: md.dueDate || "",
+            pregnancyNotes: md.pregnancyNotes || "",
+            smokingStatus: md.smokingStatus || "",
+            alcoholConsumption: md.alcoholConsumption || "",
+            exerciseFrequency: md.exerciseFrequency || "",
+            dietaryPreferences: md.dietaryPreferences || "",
+            lifestyleNotes: md.lifestyleNotes || "",
+            notes: md.notes || "",
+            updatedAt: md.updatedAt || null,
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching patient data:", error);
+        Alert.alert("Error", "Failed to load patient information");
+      }
+    };
+
+    fetchPatientData();
+  }, [patientIdParam, userType]);
+
+  // isFemale is derived from patientProfile, not the caregiver's own data
+  const isFemale = patientProfile.gender?.toLowerCase() === "female";
 
   const handleSave = async () => {
-    if (!user) {
+    if (!targetUserId) {
       Alert.alert("Error", "User not authenticated");
       return;
     }
 
+    if (userType === "caregiver" && !canEdit) {
+      Alert.alert(
+        "Permission Denied",
+        "You don't have permission to edit health records.",
+      );
+      return;
+    }
+
     setLoading(true);
+    // Reset old data first (prevents showing caregiver info)
+    setPatientProfile({ name: "", dateOfBirth: "", gender: "" });
     try {
-      // Directly update Firestore
-      const userRef = doc(db, "users", user.uid);
+      const userRef = doc(db, "users", targetUserId);
 
       await updateDoc(userRef, {
         "medicalData.bloodType": formData.bloodType,
@@ -99,10 +244,6 @@ export default function PatientInfoScreen() {
 
       Alert.alert("Success", "Medical information updated successfully");
       setIsEditing(false);
-
-      // Optional: Refresh the data in your context
-      // You might want to add a refresh function to your OnboardingContext
-      // or just reload the data
     } catch (error) {
       console.error("Error updating medical data:", error);
       Alert.alert("Error", "Failed to update medical information");
@@ -115,7 +256,7 @@ export default function PatientInfoScreen() {
     if (value.trim()) {
       setFormData((prev) => ({
         ...prev,
-        [field]: [...prev[field], value.trim()],
+        [field]: [...(prev as any)[field], value.trim()],
       }));
       setter("");
     }
@@ -124,9 +265,73 @@ export default function PatientInfoScreen() {
   const removeItem = (field: string, index: number) => {
     setFormData((prev) => ({
       ...prev,
-      [field]: prev[field].filter((_: any, i: number) => i !== index),
+      [field]: (prev as any)[field].filter((_: any, i: number) => i !== index),
     }));
   };
+
+  // Show loading state while permissions are being resolved for caregivers
+  if (userType === "caregiver" && permissionsLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color="#0f172a" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Patient Information</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={styles.blockedContainer}>
+          <Text style={styles.blockedText}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // If caregiver doesn't have view permission, show blocked screen
+  if (
+    userType === "caregiver" &&
+    !canView &&
+    !permissionsLoading &&
+    selectedPatientId
+  ) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color="#0f172a" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Patient Information</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={styles.blockedContainer}>
+          <View style={styles.blockedIconContainer}>
+            <Ionicons name="lock-closed" size={60} color="#cbd5e1" />
+          </View>
+          <Text style={styles.blockedTitle}>Access Restricted</Text>
+          <Text style={styles.blockedText}>
+            You don't have permission to view this patient's medical
+            information.
+          </Text>
+          <Text style={styles.blockedSubtext}>
+            Please contact the patient or request access from your caregiver
+            settings.
+          </Text>
+          <TouchableOpacity
+            style={styles.blockedButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.blockedButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -139,12 +344,14 @@ export default function PatientInfoScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Patient Information</Text>
         {!isEditing ? (
-          <TouchableOpacity
-            onPress={() => setIsEditing(true)}
-            style={styles.editButton}
-          >
-            <Ionicons name="create-outline" size={22} color="#3b82f6" />
-          </TouchableOpacity>
+          canEdit && (
+            <TouchableOpacity
+              onPress={() => setIsEditing(true)}
+              style={styles.editButton}
+            >
+              <Ionicons name="create-outline" size={22} color="#3b82f6" />
+            </TouchableOpacity>
+          )
         ) : (
           <TouchableOpacity
             onPress={handleSave}
@@ -158,6 +365,26 @@ export default function PatientInfoScreen() {
         )}
       </View>
 
+      {/* If caregiver has view but not edit permission, show overlay on edit mode */}
+      {userType === "caregiver" && !canEdit && isEditing ? (
+        <View style={styles.editOverlay}>
+          <View style={styles.editOverlayContent}>
+            <Ionicons name="lock-closed" size={48} color="#cbd5e1" />
+            <Text style={styles.editOverlayTitle}>Edit Restricted</Text>
+            <Text style={styles.editOverlayText}>
+              You don't have permission to edit this patient's medical
+              information.
+            </Text>
+            <TouchableOpacity
+              style={styles.editOverlayButton}
+              onPress={() => setIsEditing(false)}
+            >
+              <Text style={styles.editOverlayButtonText}>Go Back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Personal Information Section - Read Only */}
         <View style={styles.section}>
@@ -169,25 +396,25 @@ export default function PatientInfoScreen() {
           <View style={styles.infoCard}>
             <InfoRow
               label="Full Name"
-              value={data.userData.name || "Not provided"}
+              value={patientProfile.name || "Not provided"}
             />
             <Divider />
             <InfoRow
               label="Date of Birth"
-              value={data.userData.dateOfBirth || "Not provided"}
+              value={patientProfile.dateOfBirth || "Not provided"}
             />
             <Divider />
             <InfoRow
               label="Age"
-              value={calculateAge(data.userData.dateOfBirth)}
+              value={calculateAge(patientProfile.dateOfBirth)}
             />
             <Divider />
             <InfoRow
               label="Gender"
               value={
-                data.userData.gender
-                  ? data.userData.gender.charAt(0).toUpperCase() +
-                    data.userData.gender.slice(1)
+                patientProfile.gender
+                  ? patientProfile.gender.charAt(0).toUpperCase() +
+                    patientProfile.gender.slice(1)
                   : "Not provided"
               }
             />
@@ -205,7 +432,7 @@ export default function PatientInfoScreen() {
             {/* Basic Vitals */}
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Blood Type</Text>
-              {isEditing ? (
+              {isEditing && canEdit ? (
                 <>
                   <TouchableOpacity
                     style={styles.dropdownButton}
@@ -289,8 +516,8 @@ export default function PatientInfoScreen() {
             <EditableInfoRow
               label="Height (cm)"
               value={formData.height}
-              isEditing={isEditing}
-              onChangeText={(text) =>
+              isEditing={isEditing && canEdit}
+              onChangeText={(text: string) =>
                 setFormData((prev) => ({ ...prev, height: text }))
               }
               placeholder="e.g., 165"
@@ -300,8 +527,8 @@ export default function PatientInfoScreen() {
             <EditableInfoRow
               label="Weight (kg)"
               value={formData.weight}
-              isEditing={isEditing}
-              onChangeText={(text) =>
+              isEditing={isEditing && canEdit}
+              onChangeText={(text: string) =>
                 setFormData((prev) => ({ ...prev, weight: text }))
               }
               placeholder="e.g., 65"
@@ -324,11 +551,11 @@ export default function PatientInfoScreen() {
             <EditableListField
               label="Drug Allergies ⚠️"
               items={formData.drugAllergies}
-              isEditing={isEditing}
+              isEditing={isEditing && canEdit}
               onAdd={() =>
                 addItem("drugAllergies", newDrugAllergy, setNewDrugAllergy)
               }
-              onRemove={(index) => removeItem("drugAllergies", index)}
+              onRemove={(index: number) => removeItem("drugAllergies", index)}
               newItemValue={newDrugAllergy}
               onNewItemChange={setNewDrugAllergy}
               placeholder="Add drug allergy"
@@ -341,9 +568,9 @@ export default function PatientInfoScreen() {
             <EditableListField
               label="Other Allergies"
               items={formData.allergies}
-              isEditing={isEditing}
+              isEditing={isEditing && canEdit}
               onAdd={() => addItem("allergies", newAllergy, setNewAllergy)}
-              onRemove={(index) => removeItem("allergies", index)}
+              onRemove={(index: number) => removeItem("allergies", index)}
               newItemValue={newAllergy}
               onNewItemChange={setNewAllergy}
               placeholder="Add allergy (e.g., pollen, dust)"
@@ -356,9 +583,9 @@ export default function PatientInfoScreen() {
             <EditableListField
               label="Medical Conditions"
               items={formData.conditions}
-              isEditing={isEditing}
+              isEditing={isEditing && canEdit}
               onAdd={() => addItem("conditions", newCondition, setNewCondition)}
-              onRemove={(index) => removeItem("conditions", index)}
+              onRemove={(index: number) => removeItem("conditions", index)}
               newItemValue={newCondition}
               onNewItemChange={setNewCondition}
               placeholder="Add condition (e.g., diabetes, asthma)"
@@ -366,7 +593,7 @@ export default function PatientInfoScreen() {
               iconColor="#3b82f6"
             />
 
-            {/* Pregnancy/Breastfeeding Status (for female users only) */}
+            {/* Pregnancy/Breastfeeding Status (for female patients only) */}
             {isFemale && (
               <>
                 <Divider />
@@ -381,8 +608,8 @@ export default function PatientInfoScreen() {
                   <EditableToggleRow
                     label="Pregnant"
                     value={formData.isPregnant}
-                    isEditing={isEditing}
-                    onToggle={(value) =>
+                    isEditing={isEditing && canEdit}
+                    onToggle={(value: boolean) =>
                       setFormData((prev) => ({ ...prev, isPregnant: value }))
                     }
                   />
@@ -393,8 +620,8 @@ export default function PatientInfoScreen() {
                       <EditableInfoRow
                         label="Due Date"
                         value={formData.dueDate}
-                        isEditing={isEditing}
-                        onChangeText={(text) =>
+                        isEditing={isEditing && canEdit}
+                        onChangeText={(text: string) =>
                           setFormData((prev) => ({ ...prev, dueDate: text }))
                         }
                         placeholder="YYYY-MM-DD"
@@ -412,8 +639,8 @@ export default function PatientInfoScreen() {
                   <EditableToggleRow
                     label="Breastfeeding"
                     value={formData.isBreastfeeding}
-                    isEditing={isEditing}
-                    onToggle={(value) =>
+                    isEditing={isEditing && canEdit}
+                    onToggle={(value: boolean) =>
                       setFormData((prev) => ({
                         ...prev,
                         isBreastfeeding: value,
@@ -427,8 +654,8 @@ export default function PatientInfoScreen() {
                       <EditableInfoRow
                         label="Pregnancy Notes"
                         value={formData.pregnancyNotes}
-                        isEditing={isEditing}
-                        onChangeText={(text) =>
+                        isEditing={isEditing && canEdit}
+                        onChangeText={(text: string) =>
                           setFormData((prev) => ({
                             ...prev,
                             pregnancyNotes: text,
@@ -454,8 +681,8 @@ export default function PatientInfoScreen() {
               <EditablePickerRow
                 label="Smoking Status"
                 value={formData.smokingStatus}
-                isEditing={isEditing}
-                onSelect={(value) =>
+                isEditing={isEditing && canEdit}
+                onSelect={(value: string) =>
                   setFormData((prev) => ({ ...prev, smokingStatus: value }))
                 }
                 options={[
@@ -469,8 +696,8 @@ export default function PatientInfoScreen() {
               <EditablePickerRow
                 label="Alcohol Consumption"
                 value={formData.alcoholConsumption}
-                isEditing={isEditing}
-                onSelect={(value) =>
+                isEditing={isEditing && canEdit}
+                onSelect={(value: string) =>
                   setFormData((prev) => ({
                     ...prev,
                     alcoholConsumption: value,
@@ -488,8 +715,8 @@ export default function PatientInfoScreen() {
               <EditablePickerRow
                 label="Exercise Frequency"
                 value={formData.exerciseFrequency}
-                isEditing={isEditing}
-                onSelect={(value) =>
+                isEditing={isEditing && canEdit}
+                onSelect={(value: string) =>
                   setFormData((prev) => ({ ...prev, exerciseFrequency: value }))
                 }
                 options={[
@@ -504,20 +731,19 @@ export default function PatientInfoScreen() {
               <EditableInfoRow
                 label="Dietary Preferences"
                 value={formData.dietaryPreferences}
-                isEditing={isEditing}
-                onChangeText={(text) =>
+                isEditing={isEditing && canEdit}
+                onChangeText={(text: string) =>
                   setFormData((prev) => ({ ...prev, dietaryPreferences: text }))
                 }
                 placeholder="e.g., Vegetarian, Vegan, Low-sodium"
                 multiline
               />
-
               <Divider />
               <EditableInfoRow
                 label="Lifestyle Notes"
                 value={formData.lifestyleNotes}
-                isEditing={isEditing}
-                onChangeText={(text) =>
+                isEditing={isEditing && canEdit}
+                onChangeText={(text: string) =>
                   setFormData((prev) => ({ ...prev, lifestyleNotes: text }))
                 }
                 placeholder="Additional lifestyle information"
@@ -530,8 +756,8 @@ export default function PatientInfoScreen() {
             <EditableInfoRow
               label="Additional Medical Notes"
               value={formData.notes}
-              isEditing={isEditing}
-              onChangeText={(text) =>
+              isEditing={isEditing && canEdit}
+              onChangeText={(text: string) =>
                 setFormData((prev) => ({ ...prev, notes: text }))
               }
               placeholder="Any other medical information"
@@ -539,14 +765,12 @@ export default function PatientInfoScreen() {
             />
 
             {/* Last Updated */}
-            {(data.medicalData.updatedAt || data.userData.updatedAt) && (
+            {formData.updatedAt && (
               <>
                 <Divider />
                 <InfoRow
                   label="Last Medical Update"
-                  value={formatTimestamp(
-                    data.medicalData.updatedAt || data.userData.updatedAt,
-                  )}
+                  value={formatTimestamp(formData.updatedAt)}
                 />
               </>
             )}
@@ -557,7 +781,16 @@ export default function PatientInfoScreen() {
   );
 }
 
-// Helper Functions (keep all the same helper functions from your original code)
+// Main export - wraps content with provider
+export default function PatientInfoScreen() {
+  return (
+    <SelectedPatientProvider>
+      <PatientInfoContent />
+    </SelectedPatientProvider>
+  );
+}
+
+// Helper Functions
 const calculateAge = (dateOfBirth: string): string => {
   if (!dateOfBirth) return "Not provided";
   const today = new Date();
@@ -595,7 +828,6 @@ const calculateTrimester = (dueDate: string): string => {
   const weeksPregnant = Math.floor(
     (today.getTime() - conceptionDate.getTime()) / (1000 * 60 * 60 * 24 * 7),
   );
-
   if (weeksPregnant < 13) return "First Trimester (Weeks 1-12)";
   if (weeksPregnant < 27) return "Second Trimester (Weeks 13-26)";
   return "Third Trimester (Weeks 27-40)";
@@ -619,7 +851,7 @@ const formatTimestamp = (timestamp: any): string => {
   });
 };
 
-// Helper Components (keep all the same helper components from your original code)
+// Helper Components
 const InfoRow = ({ label, value, isMultiline = false }: any) => (
   <View style={styles.infoRow}>
     <Text style={styles.infoLabel}>{label}</Text>
@@ -645,11 +877,8 @@ const EditableInfoRow = ({
         style={[styles.input, multiline && styles.inputMultiline]}
         value={value}
         onChangeText={(text) => {
-          // Add validation for numeric fields
           if (keyboardType === "numeric") {
-            // Only allow numbers and decimal point
             const numericText = text.replace(/[^0-9.]/g, "");
-            // Prevent multiple decimal points
             const parts = numericText.split(".");
             const formattedText =
               parts.length > 2
@@ -1098,5 +1327,78 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#10b981",
+  },
+  blockedContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 32,
+  },
+  blockedIconContainer: {
+    marginBottom: 16,
+  },
+  blockedTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+    marginBottom: 8,
+  },
+  blockedText: {
+    fontSize: 14,
+    color: "#64748b",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  blockedSubtext: {
+    fontSize: 13,
+    color: "#94a3b8",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  blockedButton: {
+    backgroundColor: "#3b82f6",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  blockedButtonText: {
+    color: "white",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  editOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  editOverlayContent: {
+    alignItems: "center",
+    padding: 32,
+  },
+  editOverlayTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  editOverlayText: {
+    fontSize: 14,
+    color: "#64748b",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  editOverlayButton: {
+    backgroundColor: "#3b82f6",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  editOverlayButtonText: {
+    color: "white",
+    fontWeight: "600",
+    fontSize: 14,
   },
 });

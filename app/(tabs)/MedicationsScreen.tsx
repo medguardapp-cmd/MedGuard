@@ -607,8 +607,9 @@ export default function MedicationsScreen() {
   }, [reminders, user?.uid]);
 
   const loadReactions = useCallback(async () => {
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     setLoadingReactions(true);
     setReactionsError(null);
@@ -622,7 +623,7 @@ export default function MedicationsScreen() {
         return;
       }
 
-      const analysis = await generateReactionsAnalysis(userId, todaysMeds);
+      const analysis = await generateReactionsAnalysis(userType, todaysMeds);
       setAiAnalysis(analysis);
     } catch (error: any) {
       setReactionsError(error.message || "Failed to load reactions");
@@ -630,7 +631,7 @@ export default function MedicationsScreen() {
       setLoadingReactions(false);
       setReactionsLoaded(true);
     }
-  }, [user, getTodaysMedications]);
+  }, [userType, selectedPatientId, user?.uid, getTodaysMedications]);
 
   // Helper functions
   const formatTime = (time: string) => {
@@ -718,19 +719,22 @@ export default function MedicationsScreen() {
   };
 
   const saveMedicationToFirestore = async (data: Partial<Medication>) => {
-    const userId = user?.uid;
-    if (!userId) return;
+    // ✅ Use patient ID for caregivers, user ID for patients
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+
+    if (!targetUserId) return;
 
     try {
       if (editingMedication) {
         await updateDoc(
-          doc(db, "users", userId, "medications", editingMedication.id),
+          doc(db, "users", targetUserId, "medications", editingMedication.id),
           { ...data, updatedAt: serverTimestamp() },
         );
         Alert.alert("Success", "Medication updated");
       } else {
         const docRef = await addDoc(
-          collection(db, "users", userId, "medications"),
+          collection(db, "users", targetUserId, "medications"),
           {
             ...data,
             active: true,
@@ -825,9 +829,9 @@ export default function MedicationsScreen() {
       Alert.alert("Error", "Please select a medication");
       return;
     }
-
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     const normalizedDays =
       reminderForm.days && reminderForm.days.length > 0
@@ -879,16 +883,16 @@ export default function MedicationsScreen() {
 
       if (editingReminder) {
         // Cancel old alarm before updating
-        await cancelMedicationAlarm(`${userId}_${editingReminder.id}`);
+        await cancelMedicationAlarm(`${targetUserId}_${editingReminder.id}`);
         await updateDoc(
-          doc(db, "users", userId, "reminders", editingReminder.id),
+          doc(db, "users", targetUserId, "reminders", editingReminder.id),
           reminderData,
         );
         reminderId = editingReminder.id;
         Alert.alert("Success", "Reminder updated");
       } else {
         const docRef = await addDoc(
-          collection(db, "users", userId, "reminders"),
+          collection(db, "users", targetUserId, "reminders"),
           reminderData,
         );
         reminderId = docRef.id;
@@ -904,7 +908,7 @@ export default function MedicationsScreen() {
             // One-time reminder
             const alarmTime = new Date(scheduledDate);
             await scheduleMedicationAlarm(
-              `${userId}_${reminderId}_${time}`,
+              `${targetUserId}_${reminderId}_${time}`,
               reminderData.medicationName,
               reminderData.medicationDosage,
               alarmTime,
@@ -938,7 +942,7 @@ export default function MedicationsScreen() {
               .filter((d) => d !== undefined);
 
             await scheduleMedicationAlarm(
-              `${userId}_${reminderId}_${time}`,
+              `${targetUserId}_${reminderId}_${time}`,
               reminderData.medicationName,
               reminderData.medicationDosage,
               alarmTime,
@@ -958,8 +962,9 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteReminder = async (id: string) => {
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     Alert.alert("Delete Reminder", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
@@ -971,18 +976,19 @@ export default function MedicationsScreen() {
           const reminder = reminders.find((r) => r.id === id);
           if (reminder) {
             for (const time of reminder.times || ["08:00"]) {
-              await cancelMedicationAlarm(`${userId}_${id}_${time}`);
+              await cancelMedicationAlarm(`${targetUserId}_${id}_${time}`);
             }
           }
-          await deleteDoc(doc(db, "users", userId, "reminders", id));
+          await deleteDoc(doc(db, "users", targetUserId, "reminders", id));
         },
       },
     ]);
   };
 
   const handleToggleReminder = async (id: string, enabled: boolean) => {
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     const reminder = reminders.find((r) => r.id === id);
 
@@ -990,7 +996,7 @@ export default function MedicationsScreen() {
       // Cancel all alarms for this reminder
       if (reminder) {
         for (const time of reminder.times || ["08:00"]) {
-          await cancelMedicationAlarm(`${userId}_${id}_${time}`);
+          await cancelMedicationAlarm(`${targetUserId}_${id}_${time}`);
         }
       }
     } else {
@@ -1004,7 +1010,7 @@ export default function MedicationsScreen() {
           if (isOneTime && reminder.scheduledDate) {
             const alarmTime = new Date(reminder.scheduledDate);
             await scheduleMedicationAlarm(
-              `${userId}_${id}_${time}`,
+              `${targetUserId}_${id}_${time}`,
               reminder.medicationName,
               reminder.medicationDosage,
               alarmTime,
@@ -1036,7 +1042,7 @@ export default function MedicationsScreen() {
               .filter((d) => d !== undefined);
 
             await scheduleMedicationAlarm(
-              `${userId}_${id}_${time}`,
+              `${targetUserId}_${id}_${time}`,
               reminder.medicationName,
               reminder.medicationDosage,
               alarmTime,
@@ -1047,7 +1053,9 @@ export default function MedicationsScreen() {
       }
     }
 
-    await updateDoc(doc(db, "users", userId, "reminders", id), { enabled });
+    await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
+      enabled,
+    });
   };
 
   const resetReminderForm = () => {
@@ -1073,18 +1081,18 @@ export default function MedicationsScreen() {
     });
   };
 
-  // Symptom log CRUD
   const handleSaveSymptomLog = async () => {
     if (!logForm.symptom.trim()) {
       Alert.alert("Error", "Please enter a symptom");
       return;
     }
 
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     try {
-      await addDoc(collection(db, "users", userId, "symptom_logs"), {
+      await addDoc(collection(db, "users", targetUserId, "symptom_logs"), {
         symptom: logForm.symptom.trim(),
         severity: logForm.severity,
         note: logForm.note.trim() || null,
