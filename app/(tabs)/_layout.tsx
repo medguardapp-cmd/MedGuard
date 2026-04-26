@@ -42,6 +42,14 @@ export default function TabLayout() {
             ),
           }}
         />
+        <Tabs.Screen
+          name="Scan"
+          options={{
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="scan-outline" size={22} color={color} />
+            ),
+          }}
+        />
 
         <Tabs.Screen
           name="AssistantScreen"

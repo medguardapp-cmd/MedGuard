@@ -3,23 +3,70 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { sendEmailVerification } from "firebase/auth";
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../hooks/useAuth";
 import { auth } from "../../lib/firebase";
 
-// Logging for verify email screen
-const logVerifyEvent = (event: string, data?: any) => {
-  const timestamp = new Date().toISOString();
-  console.log(`📧 [VERIFY] ${timestamp} - ${event}`, data || "");
-};
+// --- Status Banner ---
+type BannerType = "error" | "success" | "info";
+
+function Banner({
+  type,
+  message,
+  onDismiss,
+}: {
+  type: BannerType;
+  message: string;
+  onDismiss: () => void;
+}) {
+  const config = {
+    error: { bg: "#fef2f2", border: "#fecaca", text: "#b91c1c", icon: "⚠️" },
+    success: { bg: "#f0fdf4", border: "#bbf7d0", text: "#15803d", icon: "✓" },
+    info: { bg: "#eff6ff", border: "#bfdbfe", text: "#1d4ed8", icon: "ℹ" },
+  }[type];
+
+  return (
+    <View
+      style={[
+        bannerStyles.container,
+        { backgroundColor: config.bg, borderColor: config.border },
+      ]}
+    >
+      <Text style={[bannerStyles.icon, { color: config.text }]}>
+        {config.icon}
+      </Text>
+      <Text style={[bannerStyles.text, { color: config.text }]}>{message}</Text>
+      <TouchableOpacity
+        onPress={onDismiss}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <Text style={[bannerStyles.dismiss, { color: config.text }]}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  container: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    gap: 10,
+  },
+  icon: { fontSize: 15, fontWeight: "700" },
+  text: { flex: 1, fontSize: 13, fontWeight: "500", lineHeight: 18 },
+  dismiss: { fontSize: 13, fontWeight: "700" },
+});
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
@@ -28,354 +75,382 @@ export default function VerifyEmailScreen() {
   const { user } = useAuth();
 
   const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [lastSentTime, setLastSentTime] = useState<Date | null>(null);
+  const [banner, setBanner] = useState<{
+    type: BannerType;
+    message: string;
+  } | null>(null);
 
-  const handleResendVerification = async () => {
+  // Cooldown ticker
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  // Auto-navigate if user is already verified when screen loads
+  useEffect(() => {
+    if (user?.emailVerified) {
+      router.replace("/(tabs)");
+    }
+  }, []);
+
+  const handleResend = async () => {
     if (!auth.currentUser) {
-      logVerifyEvent("No current user found");
-      Alert.alert("Error", "User not found. Please try logging in again.");
+      setBanner({
+        type: "error",
+        message: "Session expired. Please log in again.",
+      });
       return;
     }
-
-    if (cooldown > 0) {
-      logVerifyEvent("Resend blocked - cooldown active", { cooldown });
-      return;
-    }
-
-    logVerifyEvent("Resend verification attempt", {
-      email: auth.currentUser.email,
-      userId: auth.currentUser.uid,
-    });
+    if (cooldown > 0) return;
 
     setLoading(true);
+    setBanner(null);
     try {
-      logVerifyEvent("Sending verification email via Firebase...");
       await sendEmailVerification(auth.currentUser);
-
-      const sentTime = new Date();
-      setLastSentTime(sentTime);
-
-      logVerifyEvent("Verification email sent successfully", {
-        email: auth.currentUser.email,
-        userId: auth.currentUser.uid,
-        sentTime: sentTime.toISOString(),
-        timestamp: Date.now(),
+      const now = new Date();
+      setLastSentTime(now);
+      setCooldown(60);
+      setBanner({
+        type: "success",
+        message: "Verification email sent! Check your inbox and spam folder.",
       });
-
-      Alert.alert(
-        "Email Sent!",
-        "Verification email has been sent successfully. Please check your inbox and spam folder.",
-        [{ text: "OK" }],
-      );
-
-      setCooldown(60); // 60 second cooldown
-      logVerifyEvent("Cooldown activated", { seconds: 60 });
     } catch (error: any) {
-      logVerifyEvent("Failed to send verification email", {
-        error: error.message,
-        errorCode: error.code,
-        email: auth.currentUser.email,
-      });
-
-      Alert.alert(
-        "Sending Failed",
-        `Failed to send verification email: ${error.message || "Unknown error"}`,
-        [{ text: "OK" }],
-      );
+      const code = error?.code ?? "";
+      const msg =
+        code === "auth/too-many-requests"
+          ? "Too many requests. Please wait a few minutes before trying again."
+          : "Failed to send email. Please try again.";
+      setBanner({ type: "error", message: msg });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCheckVerification = () => {
-    logVerifyEvent("Checking email verification status", {
-      hasUser: !!user,
-      email: user?.email,
-      emailVerified: user?.emailVerified,
-    });
-
-    if (user?.emailVerified) {
-      logVerifyEvent("Email verified successfully!", {
-        userId: user.uid,
-        email: user.email,
+  const handleCheckVerification = async () => {
+    if (!auth.currentUser) {
+      setBanner({
+        type: "error",
+        message: "Session expired. Please log in again.",
       });
+      return;
+    }
 
-      Alert.alert("Success!", "Your email has been verified successfully.", [
-        {
-          text: "Continue to App",
-          onPress: () => {
-            logVerifyEvent("Navigating to main app");
-            router.replace("/(tabs)");
-          },
-        },
-      ]);
-    } else {
-      logVerifyEvent("Email not yet verified");
-      Alert.alert(
-        "Not Verified",
-        "Email is not verified yet. Please check your inbox and click the verification link.",
-        [
-          {
-            text: "Resend Email",
-            onPress: handleResendVerification,
-          },
-          { text: "OK" },
-        ],
-      );
+    setChecking(true);
+    setBanner(null);
+    try {
+      // Force reload the user to get the latest emailVerified status
+      await auth.currentUser.reload();
+      const refreshed = auth.currentUser;
+
+      if (refreshed?.emailVerified) {
+        setBanner({
+          type: "success",
+          message: "Email verified! Taking you to the app…",
+        });
+        setTimeout(() => router.replace("/(tabs)"), 1200);
+      } else {
+        setBanner({
+          type: "info",
+          message:
+            "Not verified yet. Click the link in your email then tap this button again.",
+        });
+      }
+    } catch {
+      setBanner({
+        type: "error",
+        message: "Could not check status. Check your connection and try again.",
+      });
+    } finally {
+      setChecking(false);
     }
   };
 
-  useEffect(() => {
-    if (cooldown > 0) {
-      const timer = setTimeout(() => {
-        setCooldown(cooldown - 1);
-        if (cooldown === 1) {
-          logVerifyEvent("Cooldown finished");
-        }
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [cooldown]);
-
-  useEffect(() => {
-    // Log when screen loads
-    logVerifyEvent("Verify email screen loaded", {
-      emailParam: email,
-      hasUser: !!user,
-      userEmail: user?.email,
-      userVerified: user?.emailVerified,
-    });
-  }, []);
+  const displayEmail = email || user?.email || "";
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.content}>
-          <View style={styles.iconContainer}>
-            <Text style={styles.icon}>📧</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Illustration */}
+        <View style={styles.illustrationContainer}>
+          <View style={styles.outerRing}>
+            <View style={styles.innerRing}>
+              <Text style={styles.illustrationIcon}>✉️</Text>
+            </View>
           </View>
-
-          <Text style={styles.title}>Verify Your Email</Text>
-
-          <Text style={styles.message}>Weve sent a verification email to:</Text>
-
-          <View style={styles.emailContainer}>
-            <Text style={styles.email}>{email || user?.email}</Text>
-            {lastSentTime && (
-              <Text style={styles.sentTime}>
-                Last sent: {lastSentTime.toLocaleTimeString()}
-              </Text>
-            )}
-          </View>
-
-          <Text style={styles.instructions}>
-            Please check your inbox and click the verification link to activate
-            your account. If you dont see the email, check your spam folder.
-          </Text>
-
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity
-              style={[
-                styles.resendButton,
-                (loading || cooldown > 0) && styles.resendButtonDisabled,
-              ]}
-              onPress={handleResendVerification}
-              disabled={loading || cooldown > 0}
-            >
-              {loading ? (
-                <ActivityIndicator color="#3b82f6" />
-              ) : (
-                <Text style={styles.resendButtonText}>
-                  {cooldown > 0
-                    ? `Resend available in ${cooldown}s`
-                    : "Resend Verification Email"}
-                </Text>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.continueButton}
-              onPress={handleCheckVerification}
-            >
-              <Text style={styles.continueButtonText}>
-                Ive Verified My Email
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.checkStatusButton}
-              onPress={handleCheckVerification}
-            >
-              <Text style={styles.checkStatusButtonText}>
-                Check Verification Status
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.infoContainer}>
-            <Text style={styles.infoTitle}>Troubleshooting:</Text>
-            <Text style={styles.infoText}>• Check spam/junk folder</Text>
-            <Text style={styles.infoText}>
-              • Ensure email address is correct
-            </Text>
-            <Text style={styles.infoText}>
-              • Try resending if not received within 5 minutes
-            </Text>
-            <Text style={styles.infoText}>
-              • Contact support if issues persist
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.loginLink}
-            onPress={() => {
-              logVerifyEvent("Navigating back to login");
-              router.push("/(auth)/login");
-            }}
-          >
-            <Text style={styles.loginLinkText}>Back to Login</Text>
-          </TouchableOpacity>
+          {/* Decorative dots */}
+          <View style={[styles.dot, styles.dotTopLeft]} />
+          <View style={[styles.dot, styles.dotTopRight]} />
+          <View style={[styles.dot, styles.dotBottomLeft]} />
         </View>
+
+        {/* Heading */}
+        <Text style={styles.title}>Check your inbox</Text>
+        <Text style={styles.subtitle}>We sent a verification link to</Text>
+        <View style={styles.emailPill}>
+          <Text style={styles.emailText} numberOfLines={1}>
+            {displayEmail}
+          </Text>
+        </View>
+        {lastSentTime && (
+          <Text style={styles.sentTime}>
+            Last sent at{" "}
+            {lastSentTime.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </Text>
+        )}
+
+        {/* Banner */}
+        <View style={styles.bannerArea}>
+          {banner && (
+            <Banner
+              type={banner.type}
+              message={banner.message}
+              onDismiss={() => setBanner(null)}
+            />
+          )}
+        </View>
+
+        {/* Steps */}
+        <View style={styles.stepsCard}>
+          <Text style={styles.stepsTitle}>What to do next</Text>
+          {[
+            { n: "1", text: "Open the email from MedGuard" },
+            { n: "2", text: 'Click "Verify my email"' },
+            { n: "3", text: "Come back and tap the button below" },
+          ].map((s) => (
+            <View key={s.n} style={styles.step}>
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepNumber}>{s.n}</Text>
+              </View>
+              <Text style={styles.stepText}>{s.text}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Primary CTA */}
+        <TouchableOpacity
+          style={[styles.primaryButton, checking && styles.buttonDisabled]}
+          onPress={handleCheckVerification}
+          disabled={checking}
+          activeOpacity={0.85}
+        >
+          {checking ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.primaryButtonText}>
+              I&apos;ve Verified My Email
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {/* Resend */}
+        <TouchableOpacity
+          style={[
+            styles.resendButton,
+            (loading || cooldown > 0) && styles.buttonDisabled,
+          ]}
+          onPress={handleResend}
+          disabled={loading || cooldown > 0}
+          activeOpacity={0.85}
+        >
+          {loading ? (
+            <ActivityIndicator color="#2563eb" size="small" />
+          ) : (
+            <Text style={styles.resendButtonText}>
+              {cooldown > 0
+                ? `Resend in ${cooldown}s`
+                : "Resend Verification Email"}
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {/* Back to login */}
+        <TouchableOpacity
+          style={styles.backLink}
+          onPress={() => router.push("/(auth)/login")}
+        >
+          <Text style={styles.backLinkText}>← Back to Login</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
+  container: { flex: 1, backgroundColor: "#fff" },
   scrollContent: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingVertical: 40,
+    padding: 24,
+    paddingBottom: 48,
+    alignItems: "center",
   },
-  content: {
-    flex: 1,
+
+  // Illustration
+  illustrationContainer: {
+    width: 160,
+    height: 160,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 24,
+    marginBottom: 32,
+  },
+  outerRing: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "#eff6ff",
     justifyContent: "center",
     alignItems: "center",
   },
-  iconContainer: {
-    backgroundColor: "#dbeafe",
+  innerRing: {
     width: 100,
     height: 100,
     borderRadius: 50,
+    backgroundColor: "#dbeafe",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 32,
   },
-  icon: {
-    fontSize: 50,
+  illustrationIcon: { fontSize: 44 },
+  dot: {
+    position: "absolute",
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#bfdbfe",
   },
+  dotTopLeft: { top: 12, left: 10 },
+  dotTopRight: {
+    top: 20,
+    right: 8,
+    width: 7,
+    height: 7,
+    backgroundColor: "#93c5fd",
+  },
+  dotBottomLeft: {
+    bottom: 16,
+    left: 20,
+    width: 6,
+    height: 6,
+    backgroundColor: "#60a5fa",
+  },
+
+  // Text
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#1f2937",
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  message: {
-    fontSize: 16,
-    color: "#6b7280",
+    fontSize: 26,
+    fontWeight: "700",
+    color: "#111827",
     textAlign: "center",
     marginBottom: 8,
   },
-  emailContainer: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  email: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#3b82f6",
-    textAlign: "center",
-    marginBottom: 4,
-  },
-  sentTime: {
-    fontSize: 12,
-    color: "#94a3b8",
-    textAlign: "center",
-  },
-  instructions: {
-    fontSize: 16,
+  subtitle: {
+    fontSize: 15,
     color: "#6b7280",
     textAlign: "center",
-    marginBottom: 40,
-    lineHeight: 24,
-    paddingHorizontal: 20,
+    marginBottom: 12,
   },
-  buttonContainer: {
+
+  // Email pill
+  emailPill: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginBottom: 8,
+    maxWidth: "90%",
+  },
+  emailText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#2563eb",
+    textAlign: "center",
+  },
+  sentTime: { fontSize: 12, color: "#9ca3af", marginBottom: 4 },
+
+  // Banner
+  bannerArea: { width: "100%", marginTop: 8 },
+
+  // Steps card
+  stepsCard: {
     width: "100%",
-    gap: 12,
-    marginBottom: 32,
-  },
-  resendButton: {
-    backgroundColor: "#f3f4f6",
-    padding: 18,
-    borderRadius: 12,
-    alignItems: "center",
+    backgroundColor: "#f9fafb",
+    borderRadius: 16,
+    padding: 20,
+    marginTop: 8,
+    marginBottom: 24,
     borderWidth: 1,
-    borderColor: "#d1d5db",
+    borderColor: "#f3f4f6",
   },
-  resendButtonDisabled: {
-    opacity: 0.6,
-  },
-  resendButtonText: {
+  stepsTitle: {
+    fontSize: 13,
+    fontWeight: "700",
     color: "#374151",
-    fontSize: 16,
-    fontWeight: "500",
+    marginBottom: 14,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
-  continueButton: {
-    backgroundColor: "#3b82f6",
-    padding: 18,
-    borderRadius: 12,
+  step: {
+    flexDirection: "row",
     alignItems: "center",
+    marginBottom: 12,
+    gap: 12,
   },
-  continueButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
+  stepBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "#dbeafe",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
   },
-  checkStatusButton: {
-    backgroundColor: "#e0e7ff",
+  stepNumber: { fontSize: 12, fontWeight: "700", color: "#2563eb" },
+  stepText: { fontSize: 14, color: "#374151", flex: 1, lineHeight: 20 },
+
+  // Buttons
+  primaryButton: {
+    width: "100%",
+    backgroundColor: "#2563eb",
     padding: 16,
     borderRadius: 12,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#c7d2fe",
-  },
-  checkStatusButtonText: {
-    color: "#4f46e5",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  infoContainer: {
-    backgroundColor: "#f8fafc",
-    padding: 20,
-    borderRadius: 12,
-    marginBottom: 32,
-    width: "100%",
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1e293b",
     marginBottom: 12,
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  infoText: {
-    fontSize: 14,
-    color: "#475569",
-    marginBottom: 6,
-    lineHeight: 20,
-  },
-  loginLink: {
-    padding: 12,
-  },
-  loginLinkText: {
-    color: "#6b7280",
+  primaryButtonText: {
+    color: "white",
     fontSize: 16,
-    textDecorationLine: "underline",
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
+
+  resendButton: {
+    width: "100%",
+    backgroundColor: "#fff",
+    padding: 15,
+    borderRadius: 12,
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "#e5e7eb",
+    marginBottom: 24,
+  },
+  resendButtonText: { color: "#2563eb", fontSize: 15, fontWeight: "600" },
+
+  buttonDisabled: { opacity: 0.5, shadowOpacity: 0 },
+
+  // Back link
+  backLink: { padding: 8 },
+  backLinkText: { fontSize: 14, color: "#9ca3af", fontWeight: "500" },
 });
