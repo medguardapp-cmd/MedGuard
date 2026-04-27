@@ -162,8 +162,8 @@ interface ReminderStatusLog {
 // Helpers
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const LATE_THRESHOLD = 15; // minutes - after this time, show as "Late"
-const MISSED_THRESHOLD = 60;
+const LATE_THRESHOLD = 60; // minutes - after this time, show as "Late"
+const MISSED_THRESHOLD = 360;
 
 const normalizeDate = (date: Date): Date => {
   const normalized = new Date(date);
@@ -332,8 +332,8 @@ function getTakenVariance(
   const [sh, sm] = scheduledTime.split(":").map(Number);
   const scheduledMinutes = sh * 60 + sm;
   const diff = takenMinutes - scheduledMinutes;
-  if (diff > 15) return "late";
-  if (diff < -15) return "early";
+  if (diff > 60) return "late";
+  if (diff < -60) return "early";
   return "on-time";
 }
 
@@ -530,7 +530,7 @@ async function updateReminderStatuses(
 
       if (diff >= SOFT_MISSED_THRESHOLD) {
         newStatus = "missed";
-      } else if (diff >= MISSED_THRESHOLD) {
+      } else if (diff >= LATE_THRESHOLD) {
         newStatus = "late";
       }
 
@@ -553,6 +553,85 @@ const toMinutes = (t: string) => {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
 };
+
+async function backfillReminderStatusLogs(
+  userId: string,
+  date: Date,
+  reminders: Reminder[],
+  medications: Medication[],
+  takenLogs: TakenLog[],
+): Promise<void> {
+  const normalizedDate = normalizeDate(date);
+  const dk = dateKey(normalizedDate);
+  const iso = isoDateKey(normalizedDate);
+
+  // Use a sentinel to avoid re-processing days we've already backfilled
+  const sentinelRef = doc(db, "users", userId, "status_backfilled", iso);
+  const { getDoc } = await import("firebase/firestore");
+  const sentinel = await getDoc(sentinelRef);
+  if (sentinel.exists()) return;
+
+  const activeReminders = getRemindersForDate(
+    normalizedDate,
+    reminders,
+    medications,
+  );
+  if (activeReminders.length === 0) {
+    // Still write sentinel so we don't check again
+    await setDoc(sentinelRef, { writtenAt: serverTimestamp() });
+    return;
+  }
+
+  const logsForDate = takenLogs.filter((l) => l.dateKey === dk);
+  const batch = writeBatch(db);
+
+  for (const reminder of activeReminders) {
+    for (const time of reminder.times || ["08:00"]) {
+      const logId = getReminderLogId(reminder.id, time, dk);
+      const logRef = doc(db, "users", userId, "reminder_status_logs", logId);
+
+      const existingLog = await getDoc(logRef);
+      if (existingLog.exists()) continue; // already written, skip
+
+      // Check if it was taken
+      const timeSpecificId = `${reminder.id}_${time}`;
+      const takenLog = logsForDate.find(
+        (l) => l.reminderId === timeSpecificId || l.reminderId === reminder.id,
+      );
+
+      if (takenLog) {
+        const variance = getTakenVariance(time, takenLog);
+        batch.set(logRef, {
+          reminderId: reminder.id,
+          medicationId: reminder.medicationId,
+          name: reminder.medicationName,
+          dosage: reminder.medicationDosage,
+          scheduledTime: time,
+          dateKey: dk,
+          status: "taken",
+          takenAt: takenLog.takenAt,
+          takenVariance: variance,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        // Missed — it's a past day and was not taken
+        batch.set(logRef, {
+          reminderId: reminder.id,
+          medicationId: reminder.medicationId,
+          name: reminder.medicationName,
+          dosage: reminder.medicationDosage,
+          scheduledTime: time,
+          dateKey: dk,
+          status: "missed",
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  }
+
+  batch.set(sentinelRef, { writtenAt: serverTimestamp() });
+  await batch.commit();
+}
 
 // ─────────────────────────────────────────────
 // Main Screen
@@ -668,6 +747,15 @@ export default function HomeScreen() {
   const today = normalizeDate(new Date());
   const isTodaySelected =
     normalizeDate(selectedDate).getTime() === today.getTime();
+  // AFTER the existing isTodaySelected line:
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const isYesterdaySelected =
+    normalizeDate(selectedDate).getTime() ===
+    normalizeDate(yesterday).getTime();
+
+  // Take button appears for today AND yesterday only
+  const canTakeOnSelectedDate = isTodaySelected || isYesterdaySelected;
 
   // ─── Calendar days ────────────────────────────
   const generateDays = () => {
@@ -809,8 +897,6 @@ export default function HomeScreen() {
       userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
     if (!targetUserId || reminders.length === 0) return;
 
-    const yesterday = new Date(today);
-    yesterday.setDate(today.getDate() - 1);
     const iso = isoDateKey(yesterday);
 
     if (missedWrittenDates.current.has(iso)) return;
@@ -830,34 +916,18 @@ export default function HomeScreen() {
       userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
     if (!targetUserId || reminders.length === 0) return;
 
-    const todayDate = normalizeDate(new Date());
+    const iso = isoDateKey(yesterday); // ← just use the component-level `yesterday`
 
-    // Initialize today's reminders as "not-taken"
-    initializeTodayReminderLogs(
+    if (missedWrittenDates.current.has(iso)) return;
+    missedWrittenDates.current.add(iso);
+
+    saveMissedLogsForDate(
       targetUserId,
-      todayDate,
+      yesterday,
       reminders,
       medications,
+      takenLogs,
     ).catch(console.warn);
-
-    // Update statuses periodically
-    const updateStatuses = () => {
-      updateReminderStatuses(
-        targetUserId,
-        todayDate,
-        reminders,
-        medications,
-        takenLogs,
-      ).catch(console.warn);
-    };
-
-    // Update immediately
-    updateStatuses();
-
-    // Set up interval to update every minute
-    const interval = setInterval(updateStatuses, 60000);
-
-    return () => clearInterval(interval);
   }, [reminders, medications, takenLogs, selectedPatientId, userType]);
 
   // ─── Load interactions ────────────────────────
@@ -1100,10 +1170,10 @@ export default function HomeScreen() {
           isTodayDay &&
           !takenLog &&
           diff >= LATE_THRESHOLD &&
-          diff < MISSED_THRESHOLD;
+          diff < SOFT_MISSED_THRESHOLD;
 
         const isMissedSoft =
-          isTodayDay && !takenLog && diff >= MISSED_THRESHOLD;
+          isTodayDay && !takenLog && diff >= SOFT_MISSED_THRESHOLD;
 
         return {
           reminderId: r.id,
@@ -1235,8 +1305,8 @@ export default function HomeScreen() {
     const [sh, sm] = scheduledTime.split(":").map(Number);
     const scheduledMinutes = sh * 60 + sm;
     const diff = takenMinutes - scheduledMinutes;
-    if (diff > 15) return "late";
-    if (diff < -15) return "early";
+    if (diff > 60) return "late";
+    if (diff < -60) return "early";
     return "on-time";
   }
 
@@ -1520,7 +1590,10 @@ export default function HomeScreen() {
                   key={index}
                   style={[
                     styles.dayContainer,
-                    isToday(date) && styles.todayContainer,
+                    isToday(date) &&
+                      !isSelected(date) &&
+                      styles.calendarTodayContainer,
+
                     isSelected(date) && styles.selectedContainer,
                   ]}
                   onPress={() => setSelectedDate(date)}
@@ -1781,37 +1854,41 @@ export default function HomeScreen() {
                     )}
                   </View>
 
-                  {isTodaySelected && (
-                    <TouchableOpacity
-                      style={[
-                        styles.takeButton,
-                        item.taken && styles.takenButton,
-                        !safeCan.markAsTaken() && styles.disabledButton,
-                      ]}
-                      onPress={() => toggleTaken(item)}
-                      disabled={!safeCan.markAsTaken()}
-                    >
-                      <Text
+                  {canTakeOnSelectedDate &&
+                    (isTodaySelected || !item.taken) && (
+                      <TouchableOpacity
                         style={[
-                          styles.takeButtonText,
-                          item.taken && styles.takenButtonText,
+                          styles.takeButton,
+                          item.taken && styles.takenButton,
+                          !safeCan.markAsTaken() && styles.disabledButton,
                         ]}
+                        onPress={() => toggleTaken(item)}
+                        disabled={!safeCan.markAsTaken()}
                       >
-                        {item.taken ? "✓" : "Take"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  {isPast(selectedDate) && (
-                    <View style={styles.pastTakenBadge}>
-                      <Ionicons
-                        name={item.taken ? "checkmark-circle" : "close-circle"}
-                        size={22}
-                        color={
-                          item.taken ? Colors.success : Colors.error + "80"
-                        }
-                      />
-                    </View>
-                  )}
+                        <Text
+                          style={[
+                            styles.takeButtonText,
+                            item.taken && styles.takenButtonText,
+                          ]}
+                        >
+                          {item.taken ? "✓" : "Take"}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  {isPast(selectedDate) &&
+                    (!isYesterdaySelected || item.taken) && (
+                      <View style={styles.pastTakenBadge}>
+                        <Ionicons
+                          name={
+                            item.taken ? "checkmark-circle" : "close-circle"
+                          }
+                          size={22}
+                          color={
+                            item.taken ? Colors.success : Colors.error + "80"
+                          }
+                        />
+                      </View>
+                    )}
                   {isFuture(selectedDate) && (
                     <View style={styles.futureIcon}>
                       <Ionicons
@@ -1838,7 +1915,7 @@ export default function HomeScreen() {
                     ? "No medications scheduled for this day"
                     : "No medications scheduled for today"}
               </Text>
-              {isTodaySelected && (
+              {canTakeOnSelectedDate && (
                 <TouchableOpacity
                   style={[
                     styles.takeButton,
@@ -1906,9 +1983,9 @@ export default function HomeScreen() {
                 </View>
               </>
             )}
-          {/* <Text style={styles.sectionTitle}>Quick Actions</Text>
+          {/* <Text style={styles.sectionTitle}>Quick Actions</Text> */}
 
-          <View style={styles.actionsContainer}>
+          {/* <View style={styles.actionsContainer}>
             <TouchableOpacity
               style={styles.actionButton}
               onPress={async () => {
@@ -2047,7 +2124,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View> */}
           {/* Log a Dose chips */}
-          {isTodaySelected &&
+          {canTakeOnSelectedDate &&
             medications.filter((m) => m.active).length > 0 && (
               <>
                 <Text style={styles.sectionTitle}>Log a Dose</Text>
@@ -2725,6 +2802,16 @@ const styles = StyleSheet.create({
   disabledChip: {
     opacity: 0.5,
     borderColor: Colors.textTertiary,
+  },
+  calendarTodayContainer: {
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
+    borderRadius: 10,
+  },
+
+  calendarTodayText: {
+    color: Colors.primary,
+    fontWeight: "700",
   },
 });
 function cleanupPastSnapshots(targetUserId: any) {
