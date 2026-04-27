@@ -105,6 +105,7 @@ interface ScheduleItem {
   name: string;
   dosage: string;
   time: string;
+  actualTakenTime?: string | null;
   taken: boolean;
   missed: boolean;
   missedSoft: boolean;
@@ -950,15 +951,25 @@ export default function HomeScreen() {
       const takenItems: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId !== "quick-take")
         .map((l) => {
-          const scheduledTime = l.takenAt?.toDate
+          // reminderId is stored as `${baseReminderId}_${HH:MM}` — extract scheduled time
+          const parts = l.reminderId.split("_");
+          const lastPart = parts[parts.length - 1];
+          const scheduledTime =
+            parts.length >= 2 && /^\d{2}:\d{2}$/.test(lastPart)
+              ? lastPart
+              : "00:00";
+
+          const actualTakenTime = l.takenAt?.toDate
             ? l.takenAt.toDate().toTimeString().slice(0, 5)
-            : "00:00";
+            : null;
+
           return {
             reminderId: l.reminderId,
             medicationId: l.medicationId,
             name: l.name,
             dosage: l.dosage,
-            time: scheduledTime,
+            time: scheduledTime, // ← scheduled time (for column + sorting)
+            actualTakenTime, // ← real taken time (for badge)
             taken: true,
             missed: false,
             missedSoft: false,
@@ -1100,6 +1111,9 @@ export default function HomeScreen() {
           name: r.medicationName,
           dosage: r.medicationDosage,
           time,
+          actualTakenTime: takenLog?.takenAt?.toDate
+            ? takenLog.takenAt.toDate().toTimeString().slice(0, 5)
+            : null,
           taken: !!takenLog,
           missed: false,
           late: isLate,
@@ -1652,6 +1666,16 @@ export default function HomeScreen() {
                             color={Colors.success}
                           />
                           <Text style={styles.takenBadgeText}>Taken</Text>
+                          {item.actualTakenTime && (
+                            <Text
+                              style={[
+                                styles.takenBadgeText,
+                                { color: Colors.textSecondary },
+                              ]}
+                            >
+                              · {formatTime12h(item.actualTakenTime)}
+                            </Text>
+                          )}
                           {item.takenVariance === "late" && (
                             <Text
                               style={[

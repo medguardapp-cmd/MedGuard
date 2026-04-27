@@ -65,7 +65,6 @@ const normalizeDate = (date: Date): Date => {
 };
 
 const formatDateLabel = (dateString: string): string => {
-  // dateString is a Date.toDateString() value, e.g. "Mon Apr 14 2026"
   const date = new Date(dateString);
   const today = normalizeDate(new Date());
   const yesterday = new Date(today);
@@ -113,13 +112,12 @@ export default function MedicationLogsScreen() {
   const router = useRouter();
   const { selectedPatientId, userType } = useSelectedPatient();
 
-  // ✅ Get the correct user ID (patient for caregiver, self for patient)
   const targetUserId =
     userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+
   const [reminderStatusLogs, setReminderStatusLogs] = useState<
     ReminderStatusLog[]
   >([]);
-
   const [takenLogs, setTakenLogs] = useState<TakenLog[]>([]);
   const [missedLogs, setMissedLogs] = useState<MissedLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,7 +125,6 @@ export default function MedicationLogsScreen() {
     "all",
   );
 
-  // Detail modal
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [logsModalVisible, setLogsModalVisible] = useState(false);
 
@@ -146,7 +143,6 @@ export default function MedicationLogsScreen() {
       if (statusReady && takenReady && missedReady) setLoading(false);
     };
 
-    // Listen to reminder_status_logs (primary source)
     const unsubStatus = onSnapshot(
       query(
         collection(db, "users", targetUserId, "reminder_status_logs"),
@@ -164,7 +160,6 @@ export default function MedicationLogsScreen() {
       },
     );
 
-    // Keep taken_logs for backward compatibility and quick-takes
     const unsubTaken = onSnapshot(
       query(
         collection(db, "users", targetUserId, "taken_logs"),
@@ -200,47 +195,64 @@ export default function MedicationLogsScreen() {
     };
   }, []);
 
-  // ─── Group logs by date from reminder_status_logs ───────────────────────
+  // ─── Group logs by date ───────────────────────
   const getLogsByDate = () => {
     const logsByDate: Record<
       string,
       {
         taken: ReminderStatusLog[];
+        takenLate: ReminderStatusLog[];
         missed: ReminderStatusLog[];
-        late: ReminderStatusLog[];
         notTaken: ReminderStatusLog[];
       }
     > = {};
 
-    // Process reminder_status_logs
+    const today = normalizeDate(new Date()).toDateString();
+
     reminderStatusLogs.forEach((log) => {
       if (!log.dateKey) return;
+
+      // Skip "not-taken" for today — they're just pending, not historical
+      if (log.status === "not-taken" && log.dateKey === today) return;
+
       if (!logsByDate[log.dateKey]) {
         logsByDate[log.dateKey] = {
           taken: [],
+          takenLate: [],
           missed: [],
-          late: [],
           notTaken: [],
         };
       }
 
       if (log.status === "taken") {
-        // Put late variance into 'late' array instead of 'taken'
         if (log.takenVariance === "late") {
-          logsByDate[log.dateKey].late.push(log);
+          logsByDate[log.dateKey].takenLate.push(log);
         } else {
           logsByDate[log.dateKey].taken.push(log);
         }
       } else if (log.status === "missed") {
         logsByDate[log.dateKey].missed.push(log);
       } else if (log.status === "late") {
-        logsByDate[log.dateKey].late.push(log);
+        // Overdue but unresolved — treat as missed for display
+        logsByDate[log.dateKey].missed.push(log);
       } else if (log.status === "not-taken") {
         logsByDate[log.dateKey].notTaken.push(log);
       }
     });
 
-    // Sort dates newest-first
+    // Remove dates that are empty after filtering
+    Object.keys(logsByDate).forEach((dk) => {
+      const { taken, takenLate, missed, notTaken } = logsByDate[dk];
+      if (
+        taken.length === 0 &&
+        takenLate.length === 0 &&
+        missed.length === 0 &&
+        notTaken.length === 0
+      ) {
+        delete logsByDate[dk];
+      }
+    });
+
     const sortedDates = Object.keys(logsByDate).sort(
       (a, b) => new Date(b).getTime() - new Date(a).getTime(),
     );
@@ -252,27 +264,25 @@ export default function MedicationLogsScreen() {
 
   const filteredDates = sortedDates.filter((dk) => {
     if (filterType === "all") return true;
-    const { taken, missed, late } = logsByDate[dk];
-    if (filterType === "taken") return taken.length > 0 || late.length > 0;
+    const { taken, takenLate, missed } = logsByDate[dk];
+    if (filterType === "taken") return taken.length > 0 || takenLate.length > 0;
     if (filterType === "missed") return missed.length > 0;
     return true;
   });
 
   // ─── Overall stats ────────────────────────────
   const totalTaken = reminderStatusLogs.filter(
-    (l) => l.status === "taken" || l.status === "late",
+    (l) => l.status === "taken",
   ).length;
   const totalMissed = reminderStatusLogs.filter(
     (l) => l.status === "missed",
   ).length;
   const overallCompliance = getComplianceRate(totalTaken, totalMissed);
 
-  // ─── Quick-take stats (from legacy taken_logs) ───
   const quickTakesCount = takenLogs.filter(
     (l) => l.reminderId === "quick-take",
   ).length;
 
-  // ─── Detail modal data ────────────────────────
   const selectedLogs = selectedDate ? logsByDate[selectedDate] : null;
 
   // ─────────────────────────────────────────────
@@ -323,7 +333,7 @@ export default function MedicationLogsScreen() {
         </View>
       </View>
 
-      {/* Quick Takes Stats (optional) */}
+      {/* Quick Takes Banner */}
       {quickTakesCount > 0 && (
         <View style={styles.quickTakeStats}>
           <Ionicons name="flash" size={16} color="#8b5cf6" />
@@ -369,35 +379,14 @@ export default function MedicationLogsScreen() {
           </View>
         ) : (
           filteredDates.map((dk) => {
-            const { taken, missed, late, notTaken } = logsByDate[dk];
-
-            // Get unique medication IDs for each status
-            const uniqueTakenCount = new Set(
-              [...taken, ...late].map((l) => l.medicationId),
-            ).size;
-            const uniqueMissedCount = new Set(missed.map((l) => l.medicationId))
-              .size;
-            const uniqueNotTakenCount = new Set(
-              notTaken.map((l) => l.medicationId),
-            ).size;
-
-            const uniqueLateCount = new Set(late.map((l) => l.medicationId))
-              .size;
-
-            const allUniqueMedIds = new Set([
-              ...taken.map((l) => l.medicationId),
-              ...late.map((l) => l.medicationId),
-              ...missed.map((l) => l.medicationId),
-              ...notTaken.map((l) => l.medicationId),
-            ]);
-
-            const totalScheduled = allUniqueMedIds.size;
-            const complianceRate =
-              totalScheduled > 0
-                ? getComplianceRate(uniqueTakenCount, uniqueMissedCount)
-                : 100;
+            const { taken, takenLate, missed, notTaken } = logsByDate[dk];
+            const takenCount = taken.length + takenLate.length;
             const missedCount = missed.length;
-            const notTakenCount = notTaken.length;
+            const totalScheduled = takenCount + missedCount + notTaken.length;
+            const complianceRate =
+              takenCount + missedCount > 0
+                ? getComplianceRate(takenCount, missedCount)
+                : 100;
 
             return (
               <TouchableOpacity
@@ -434,26 +423,16 @@ export default function MedicationLogsScreen() {
                       size={18}
                       color="#10b981"
                     />
-                    <Text style={styles.statItemText}>
-                      {uniqueTakenCount} taken
-                    </Text>
+                    <Text style={styles.statItemText}>{takenCount} taken</Text>
                   </View>
-                  {/* {late.length > 0 && (
+                  {missedCount > 0 && (
                     <View style={styles.statItem}>
-                      <Ionicons name="time" size={18} color="#f59e0b" />
-                      <Text style={[styles.statItemText, { color: "#f59e0b" }]}>
-                        {uniqueLateCount} late
+                      <Ionicons name="close-circle" size={18} color="#ef4444" />
+                      <Text style={[styles.statItemText, { color: "#ef4444" }]}>
+                        {missedCount} missed
                       </Text>
                     </View>
                   )}
-                  {uniqueMissedCount > 0 && (
-                    <View style={styles.statItem}>
-                      <Ionicons name="close-circle" size={18} color="#ef4444" />
-                      <Text style={[styles.statItemText, styles.missedText]}>
-                        {uniqueMissedCount} missed
-                      </Text>
-                    </View>
-                  )} */}
                   <View style={styles.statItem}>
                     <Ionicons name="medical" size={18} color={Colors.primary} />
                     <Text style={styles.statItemText}>
@@ -493,10 +472,10 @@ export default function MedicationLogsScreen() {
           </View>
 
           <ScrollView style={styles.modalContent}>
-            {/* Taken Medications (including late) */}
+            {/* Taken Medications */}
             {selectedLogs &&
               (selectedLogs.taken.length > 0 ||
-                selectedLogs.late.length > 0) && (
+                selectedLogs.takenLate.length > 0) && (
                 <View style={styles.logSection}>
                   <View style={styles.logSectionHeader}>
                     <Ionicons
@@ -508,11 +487,11 @@ export default function MedicationLogsScreen() {
                       Taken Medications
                     </Text>
                     <Text style={styles.logSectionCount}>
-                      {selectedLogs.taken.length + selectedLogs.late.length}
+                      {selectedLogs.taken.length +
+                        selectedLogs.takenLate.length}
                     </Text>
                   </View>
 
-                  {/* On-time taken */}
                   {selectedLogs.taken.map((log) => (
                     <View key={log.id} style={styles.detailCard}>
                       <View style={styles.detailCardHeader}>
@@ -523,29 +502,22 @@ export default function MedicationLogsScreen() {
                             size={12}
                             color="#10b981"
                           />
-                          <Text style={styles.takenBadgeText}>Taken</Text>
-                          {log.takenVariance === "early" && (
-                            <Text
-                              style={[
-                                styles.takenBadgeText,
-                                { color: Colors.primary },
-                              ]}
-                            >
-                              · Early
-                            </Text>
-                          )}
+                          <Text style={styles.takenBadgeText}>
+                            {log.takenVariance === "early"
+                              ? "Early"
+                              : "On time"}
+                          </Text>
                         </View>
                       </View>
                       <Text style={styles.detailDosage}>{log.dosage}</Text>
                       <Text style={styles.detailTime}>
-                        Taken at {formatTime(log.takenAt)} (scheduled{" "}
-                        {formatTime12h(log.scheduledTime)})
+                        Taken at {formatTime(log.takenAt)} · scheduled{" "}
+                        {formatTime12h(log.scheduledTime)}
                       </Text>
                     </View>
                   ))}
 
-                  {/* Late taken */}
-                  {selectedLogs.late.map((log) => (
+                  {selectedLogs.takenLate.map((log) => (
                     <View
                       key={log.id}
                       style={[styles.detailCard, styles.lateCard]}
@@ -559,8 +531,8 @@ export default function MedicationLogsScreen() {
                       </View>
                       <Text style={styles.detailDosage}>{log.dosage}</Text>
                       <Text style={styles.detailTime}>
-                        Taken at {formatTime(log.takenAt)} (scheduled{" "}
-                        {formatTime12h(log.scheduledTime)})
+                        Taken at {formatTime(log.takenAt)} · scheduled{" "}
+                        {formatTime12h(log.scheduledTime)}
                       </Text>
                     </View>
                   ))}
@@ -568,7 +540,7 @@ export default function MedicationLogsScreen() {
               )}
 
             {/* Missed Medications */}
-            {selectedLogs?.missed && selectedLogs.missed.length > 0 && (
+            {selectedLogs && selectedLogs.missed.length > 0 && (
               <View style={styles.logSection}>
                 <View style={styles.logSectionHeader}>
                   <Ionicons name="close-circle" size={22} color="#ef4444" />
@@ -595,8 +567,8 @@ export default function MedicationLogsScreen() {
               </View>
             )}
 
-            {/* Not Taken (Still Pending) - only show for today/past dates with pending doses */}
-            {selectedLogs?.notTaken && selectedLogs.notTaken.length > 0 && (
+            {/* Not Taken / Pending */}
+            {selectedLogs && selectedLogs.notTaken.length > 0 && (
               <View style={styles.logSection}>
                 <View style={styles.logSectionHeader}>
                   <Ionicons name="time-outline" size={22} color="#94a3b8" />
@@ -627,7 +599,7 @@ export default function MedicationLogsScreen() {
               </View>
             )}
 
-            {/* As-Needed / Quick Takes from legacy logs */}
+            {/* As-Needed / Quick Takes */}
             {(() => {
               const quickTakesForDate = takenLogs.filter(
                 (l) =>
@@ -674,34 +646,29 @@ export default function MedicationLogsScreen() {
               );
             })()}
 
-            {/* Summary Card */}
+            {/* Daily Summary */}
             {selectedLogs && (
               <View style={styles.summaryCard}>
                 <Text style={styles.summaryTitle}>Daily Summary</Text>
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Scheduled Total</Text>
                   <Text style={styles.summaryValue}>
-                    {
-                      new Set([
-                        ...selectedLogs.taken.map((l) => l.medicationId),
-                        ...selectedLogs.late.map((l) => l.medicationId),
-                        ...selectedLogs.missed.map((l) => l.medicationId),
-                        ...selectedLogs.notTaken.map((l) => l.medicationId),
-                      ]).size
-                    }
+                    {selectedLogs.taken.length +
+                      selectedLogs.takenLate.length +
+                      selectedLogs.missed.length +
+                      selectedLogs.notTaken.length}
                   </Text>
                 </View>
-
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Taken (On Time)</Text>
+                  <Text style={styles.summaryLabel}>Taken (on time)</Text>
                   <Text style={[styles.summaryValue, { color: "#10b981" }]}>
                     {selectedLogs.taken.length}
                   </Text>
                 </View>
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Taken (Late)</Text>
+                  <Text style={styles.summaryLabel}>Taken (late)</Text>
                   <Text style={[styles.summaryValue, { color: "#f59e0b" }]}>
-                    {selectedLogs.late.length}
+                    {selectedLogs.takenLate.length}
                   </Text>
                 </View>
                 <View style={styles.summaryRow}>
@@ -710,12 +677,14 @@ export default function MedicationLogsScreen() {
                     {selectedLogs.missed.length}
                   </Text>
                 </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Not Taken</Text>
-                  <Text style={[styles.summaryValue, { color: "#94a3b8" }]}>
-                    {selectedLogs.notTaken.length}
-                  </Text>
-                </View>
+                {selectedLogs.notTaken.length > 0 && (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Pending</Text>
+                    <Text style={[styles.summaryValue, { color: "#94a3b8" }]}>
+                      {selectedLogs.notTaken.length}
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
           </ScrollView>
