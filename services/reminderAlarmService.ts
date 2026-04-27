@@ -1,88 +1,83 @@
 // services/reminderAlarmService.ts
 import * as Notifications from "expo-notifications";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true, // ✅ replaces shouldShowAlert
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowList: true, // ✅ for Android notification drawer
-    priority: Notifications.AndroidNotificationPriority.HIGH,
-  }),
-});
+// Map day names to JS weekday numbers (0 = Sunday, 6 = Saturday)
+const DAY_MAP: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
 
-// Schedule a medication reminder alarm
+// Schedule medication alarms for multiple days and times
 export async function scheduleMedicationAlarm(
   reminderId: string,
   medicationName: string,
   dosage: string,
-  scheduledTime: Date,
-  options?: {
-    repeat?: boolean;
-    weekdays?: number[];
-  },
+  times: string[], // ["04:00", "16:00"]
+  days: string[], // ["Mon", "Tue", "Wed"]
 ) {
-  await Notifications.cancelScheduledNotificationAsync(reminderId);
+  // Cancel existing alarms for this reminder
+  await cancelMedicationAlarm(reminderId);
 
-  let trigger: any;
+  const content = {
+    title: "💊 Medication Reminder",
+    body: `Time to take ${medicationName} ${dosage}`,
+    sound: "default",
+    priority: Notifications.AndroidNotificationPriority.HIGH,
+    categoryIdentifier: "medication_action",
+    data: {
+      reminderId,
+      medicationName,
+      dosage,
+      type: "medication_reminder",
+      action: "take",
+    },
+  };
 
-  if (options?.repeat && options.weekdays && options.weekdays.length > 0) {
-    trigger = {
-      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
-      hour: scheduledTime.getHours(),
-      minute: scheduledTime.getMinutes(),
-      weekday: options.weekdays[0] + 1,
-      repeats: true,
-    };
-  } else if (options?.repeat) {
-    trigger = {
-      type: Notifications.SchedulableTriggerInputTypes.DAILY,
-      hour: scheduledTime.getHours(),
-      minute: scheduledTime.getMinutes(),
-      repeats: true,
-    };
-  } else {
-    const secondsFromNow = Math.max(
-      1,
-      Math.floor((scheduledTime.getTime() - Date.now()) / 1000),
-    );
-    trigger = {
-      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: secondsFromNow,
-    };
+  let scheduled = 0;
+
+  for (const day of days) {
+    const jsWeekday = DAY_MAP[day];
+    if (jsWeekday === undefined) continue;
+
+    const expoWeekday = jsWeekday + 1; // JS 0-6 → Expo 1-7
+
+    for (const time of times) {
+      const [hours, minutes] = time.split(":").map(Number);
+
+      await Notifications.scheduleNotificationAsync({
+        identifier: `${reminderId}_${day}_${time}`,
+        content: {
+          ...content,
+          data: { ...content.data, day, time },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+          hour: hours,
+          minute: minutes,
+          weekday: expoWeekday,
+          repeats: true,
+        },
+      });
+
+      scheduled++;
+    }
   }
 
-  await Notifications.scheduleNotificationAsync({
-    identifier: reminderId,
-    content: {
-      title: "💊 Medication Reminder",
-      body: `Time to take ${medicationName} ${dosage}`,
-      sound: "default",
-      priority: Notifications.AndroidNotificationPriority.HIGH,
-      categoryIdentifier: "medication_action",
-      data: {
-        reminderId,
-        medicationName,
-        dosage,
-        type: "medication_reminder",
-        action: "take",
-      },
-    },
-    trigger,
-  });
-
-  console.log(`✅ Scheduled alarm for ${medicationName} at ${scheduledTime}`);
+  console.log(`✅ Scheduled ${scheduled} alarms for ${medicationName}`);
 }
 
-// Schedule a snooze alarm (remind again in X minutes)
+// Schedule a snooze alarm
 export async function scheduleSnoozeAlarm(
   reminderId: string,
   medicationName: string,
   dosage: string,
   snoozeMinutes: number = 10,
 ) {
-  const snoozeTime = new Date();
-  snoozeTime.setMinutes(snoozeTime.getMinutes() + snoozeMinutes);
   const secondsFromNow = snoozeMinutes * 60;
 
   await Notifications.scheduleNotificationAsync({
@@ -92,6 +87,7 @@ export async function scheduleSnoozeAlarm(
       body: `Don't forget to take ${medicationName} ${dosage}`,
       sound: "default",
       priority: Notifications.AndroidNotificationPriority.HIGH,
+      categoryIdentifier: "medication_action",
       data: {
         reminderId,
         medicationName,
@@ -108,11 +104,22 @@ export async function scheduleSnoozeAlarm(
   });
 }
 
-// Cancel a scheduled alarm
+// Cancel all alarms for a reminder
 export async function cancelMedicationAlarm(reminderId: string) {
-  await Notifications.cancelScheduledNotificationAsync(reminderId);
-  await Notifications.cancelScheduledNotificationAsync(`${reminderId}_snooze`);
-  console.log(`❌ Cancelled alarm for reminder: ${reminderId}`);
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+
+  const toCancel = scheduled.filter(
+    (n) =>
+      n.identifier === reminderId || n.identifier.startsWith(`${reminderId}_`),
+  );
+
+  for (const notification of toCancel) {
+    await Notifications.cancelScheduledNotificationAsync(
+      notification.identifier,
+    );
+  }
+
+  console.log(`❌ Cancelled ${toCancel.length} alarms for: ${reminderId}`);
 }
 
 // Cancel all alarms for a user
@@ -124,7 +131,7 @@ export async function cancelAllUserAlarms(userId: string) {
   }
 }
 
-// Setup notification categories for action buttons
+// Setup notification categories
 export async function setupNotificationCategories() {
   await Notifications.setNotificationCategoryAsync("medication_action", [
     {

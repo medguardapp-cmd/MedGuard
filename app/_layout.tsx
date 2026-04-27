@@ -27,6 +27,7 @@ import {
   cancelMedicationAlarm,
   handleNotificationResponse,
   scheduleSnoozeAlarm,
+  setupNotificationCategories,
 } from "../services/reminderAlarmService";
 
 SplashScreen.preventAutoHideAsync();
@@ -50,6 +51,7 @@ function RootLayoutNav() {
 
     const setupNotifications = async () => {
       await registerForPushNotificationsAsync();
+      await setupNotificationCategories();
     };
 
     setupNotifications();

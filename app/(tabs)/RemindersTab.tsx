@@ -112,6 +112,7 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
           <View style={styles.divider} />
 
           {/* Meta row */}
+          {/* Meta row */}
           <View style={styles.metaRow}>
             <Text style={styles.metaText}>{getDaysString(reminder.days)}</Text>
             {reminder.durationType === "date-range" &&
@@ -119,8 +120,13 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
               reminder.endDate && (
                 <>
                   <View style={styles.metaDot} />
-                  <Text style={styles.metaText}>
-                    {reminder.startDate} → {reminder.endDate}
+                  <Text
+                    style={styles.metaText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {new Date(reminder.startDate).toLocaleDateString()} →{" "}
+                    {new Date(reminder.endDate).toLocaleDateString()}
                   </Text>
                 </>
               )}
@@ -133,11 +139,13 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
             {reminder.label && (
               <>
                 <View style={styles.metaDot} />
-                <Text style={styles.metaText}>{reminder.label}</Text>
+                <Text style={styles.metaText} numberOfLines={1}>
+                  {reminder.label}
+                </Text>
               </>
             )}
             <View style={{ flex: 1 }} />
-            {/* ✅ Edit button - disabled for caregivers without permission */}
+            {/* Edit and Delete buttons */}
             <TouchableOpacity
               onPress={() => onEditReminder(reminder)}
               style={styles.actionBtn}
@@ -153,7 +161,6 @@ export const RemindersTab: React.FC<RemindersTabProps> = ({
                 }
               />
             </TouchableOpacity>
-            {/* ✅ Delete button - disabled for caregivers without permission */}
             <TouchableOpacity
               onPress={() => onDeleteReminder(reminder.id)}
               style={styles.actionBtn}

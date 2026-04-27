@@ -86,7 +86,13 @@ export const checkMissedAndLateDoses = async (
           title: "❌ Dose Missed",
           message: `You missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)}`,
           type: "error",
-          data: { reminderId: reminder.id, type: "missed" },
+          data: {
+            reminderId: reminder.id,
+            type: "missed",
+            medicationName: reminder.medicationName, // ✅ Add these
+            dosage: reminder.medicationDosage, // ✅ for email
+            scheduledTime: formatTime12h(time),
+          },
           sendPush: true, // ✅ missed dose → push if backgrounded
           channelId: "medications",
         });
@@ -129,17 +135,17 @@ export const checkConsecutiveMissedDays = async (
       notifiedConsecutiveRef.current.add(reminder.id);
       addNotification({
         title: "⚠️ Medication Adherence Alert",
-        message: `You've missed ${reminder.medicationName} for ${missedDays} consecutive days. This may affect your treatment.`,
+        message: `You've missed ${reminder.medicationName} for ${missedDays} consecutive days.`,
         type: "error",
         data: {
           reminderId: reminder.id,
           type: "consecutive-missed",
           days: missedDays,
+          medicationName: reminder.medicationName, // ✅ Add for email
         },
-        sendPush: true, // ✅ context decides whether to fire OS push
+        sendPush: true,
         channelId: "medications",
       });
-      // ❌ Removed standalone sendLocalNotification — context handles it
     }
   }
 };
@@ -207,6 +213,7 @@ export const checkCaregiverRequests = async (
           type: "caregiver-request",
           requestId: doc.id,
           caregiverId: request.caregiverId,
+          caregiverName: request.caregiverName,
         },
         sendPush: true,
         channelId: "general",
@@ -271,21 +278,23 @@ export const checkCaregiverPatientMissedDoses = async (
           if (isTaken || caregiverNotifiedMissedRef.current.has(missedKey))
             continue;
 
-          if (diffMinutes >= 60) {
-            caregiverNotifiedMissedRef.current.add(missedKey);
-            addNotification({
-              title: "⚠️ Patient Missed Dose",
-              message: `${patient.name} missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)}`,
-              type: "warning",
-              data: {
-                type: "patient-missed",
-                patientId: patient.id,
-                reminderId: reminder.id,
-              },
-              sendPush: true,
-              channelId: "medications",
-            });
-          }
+          caregiverNotifiedMissedRef.current.add(missedKey);
+          addNotification({
+            title: "⚠️ Patient Missed Dose",
+            message: `${patient.name} missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)}`,
+            type: "warning",
+            data: {
+              type: "patient-missed",
+              patientId: patient.id,
+              reminderId: reminder.id,
+              patientName: patient.name, // ✅ Add these
+              medicationName: reminder.medicationName, // ✅ for email
+              dosage: reminder.medicationDosage, // ✅ notifications
+              scheduledTime: formatTime12h(time), // ✅
+            },
+            sendPush: true,
+            channelId: "medications",
+          });
         }
       }
     } catch (error) {

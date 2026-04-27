@@ -13,8 +13,9 @@ import {
   addNotificationListener,
   registerForPushNotificationsAsync,
   savePushTokenToFirestore,
-  sendLocalNotification,
+  sendLocalNotification, // ✅ Add back
 } from "../lib/notifications";
+import { emailNotifications } from "../services/emailService";
 
 interface Notification {
   id: string;
@@ -30,8 +31,8 @@ interface NotificationInput extends Omit<
   Notification,
   "id" | "timestamp" | "read"
 > {
-  sendPush?: boolean; // ✅ NEW: opt-in per-notification
-  channelId?: string; // ✅ NEW: forward to OS channel
+  sendPush?: boolean;
+  channelId?: string;
 }
 
 interface NotificationContextType {
@@ -63,13 +64,6 @@ const generateId = () =>
 
 const CAREGIVER_ALLOWED_TYPES = ["patient-missed", "caregiver-request"];
 
-const TYPE_TO_ICON: Record<string, string> = {
-  info: "ℹ️",
-  success: "✅",
-  warning: "⚠️",
-  error: "❌",
-};
-
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -77,7 +71,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showInApp, setShowInApp] = useState(true);
-  const appStateRef = useRef(AppState.currentState); // ✅ use ref so addNotification closure stays fresh
+  const appStateRef = useRef(AppState.currentState);
 
   const hasRegistered = useRef(false);
   const dedupeRef = useRef<Set<string>>(new Set());
@@ -97,7 +91,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [user]);
 
   // ----------------------------
-  // APP STATE LISTENER  (keep ref in sync)
+  // APP STATE LISTENER
   // ----------------------------
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
@@ -117,7 +111,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         if (!CAREGIVER_ALLOWED_TYPES.includes(notifType)) return;
       }
 
-      // 🔥 Deduplicate (title + message, 10 s window)
+      // 🔥 Deduplicate
       const dedupeKey = `${notification.title}_${notification.message}`;
       if (dedupeRef.current.has(dedupeKey)) return;
       dedupeRef.current.add(dedupeKey);
@@ -132,12 +126,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       setNotifications((prev) => [newNotification, ...prev]);
 
-      // ✅ Only fire OS push when app is backgrounded (or inactive)
-      //    AND the caller opted in via sendPush
+      // ✅ Check background state ONCE
       const isBackground =
         appStateRef.current === "background" ||
         appStateRef.current === "inactive";
 
+      // ✅ Push notification (if enabled and backgrounded)
       if (sendPush && isBackground) {
         sendLocalNotification(
           notification.title,
@@ -146,28 +140,113 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
           channelId,
         );
       }
+
+      // ✅ Email notification (if backgrounded)
+      if (user?.uid && isBackground) {
+        const type = notification.data?.type;
+
+        switch (type) {
+          case "missed":
+            if (
+              notification.data?.medicationName &&
+              notification.data?.dosage &&
+              notification.data?.scheduledTime
+            ) {
+              emailNotifications.sendMissedDose(
+                user.uid,
+                notification.data.medicationName,
+                notification.data.dosage,
+                notification.data.scheduledTime,
+              );
+            }
+            break;
+
+          case "consecutive-missed":
+            if (notification.data?.medicationName && notification.data?.days) {
+              emailNotifications.sendConsecutiveMissed(
+                user.uid,
+                notification.data.medicationName,
+                notification.data.days,
+              );
+            }
+            break;
+
+          case "severe-interaction":
+            emailNotifications.sendDrugInteraction(
+              user.uid,
+              notification.data?.drug1 || "Unknown",
+              notification.data?.drug2 || "Unknown",
+              notification.data?.description || "",
+            );
+            break;
+
+          case "caregiver-request":
+            if (notification.data?.caregiverName) {
+              emailNotifications.sendCaregiverRequest(
+                user.uid,
+                notification.data.caregiverName,
+              );
+            }
+            break;
+
+          case "patient-accepted":
+            if (notification.data?.patientName) {
+              emailNotifications.sendPatientAccepted(
+                user.uid,
+                notification.data.patientName,
+              );
+            }
+            break;
+
+          case "patient-missed":
+            if (
+              notification.data?.patientName &&
+              notification.data?.medicationName
+            ) {
+              emailNotifications.sendPatientMissed(
+                user.uid,
+                notification.data.patientName,
+                notification.data.medicationName,
+                notification.data?.dosage || "",
+                notification.data?.scheduledTime || "",
+              );
+            }
+            break;
+
+          case "side-effect":
+            if (
+              notification.data?.medicationName &&
+              notification.data?.effect
+            ) {
+              emailNotifications.sendSideEffect(
+                user.uid,
+                notification.data.medicationName,
+                notification.data.effect,
+              );
+            }
+            break;
+        }
+      }
     },
-    [userRole],
+    [userRole, user?.uid],
   );
 
   // ----------------------------
-  // ✅ LISTEN FOR INCOMING PUSH NOTIFICATIONS
-  //    (keeps in-app list in sync when a push arrives from the server)
+  // LISTEN FOR INCOMING PUSH NOTIFICATIONS
   // ----------------------------
   useEffect(() => {
     const unsubscribe = addNotificationListener(
       (incoming) => {
-        // Received while app is open — add to in-app list without re-triggering a push
         addNotification({
           title: incoming.request.content.title ?? "Notification",
           message: incoming.request.content.body ?? "",
           type: incoming.request.content.data?.type ?? "info",
           data: incoming.request.content.data,
-          sendPush: false, // already came from OS — don't re-fire
+          sendPush: false,
         });
       },
       (_response) => {
-        // User tapped the notification — navigate or handle here if needed
+        // User tapped the notification
       },
     );
     return unsubscribe;

@@ -555,48 +555,20 @@ export default function MedicationsScreen() {
           const [hours, minutes] = time.split(":").map(Number);
 
           if (isOneTime && reminder.scheduledDate) {
-            const alarmTime = new Date(reminder.scheduledDate);
-            // Only schedule if alarm time is in the future
-            if (alarmTime > new Date()) {
-              await scheduleMedicationAlarm(
-                `${userId}_${reminder.id}_${time}`,
-                reminder.medicationName,
-                reminder.medicationDosage,
-                alarmTime,
-                { repeat: false },
-              );
-            }
-          } else if (reminder.days && reminder.days.length > 0) {
-            const alarmTime = new Date();
-            alarmTime.setHours(hours, minutes, 0, 0);
-
-            const dayMap: { [key: string]: number } = {
-              Sun: 0,
-              Mon: 1,
-              Tue: 2,
-              Wed: 3,
-              Thu: 4,
-              Fri: 5,
-              Sat: 6,
-              Sunday: 0,
-              Monday: 1,
-              Tuesday: 2,
-              Wednesday: 3,
-              Thursday: 4,
-              Friday: 5,
-              Saturday: 6,
-            };
-
-            const weekdays = reminder.days
-              .map((day) => dayMap[day])
-              .filter((d) => d !== undefined);
-
             await scheduleMedicationAlarm(
-              `${userId}_${reminder.id}_${time}`,
+              `${userId}_${reminder.id}`,
               reminder.medicationName,
               reminder.medicationDosage,
-              alarmTime,
-              { repeat: true, weekdays },
+              reminder.times || ["08:00"], // ✅ times array
+              [], // ✅ empty days
+            );
+          } else if (reminder.days && reminder.days.length > 0) {
+            await scheduleMedicationAlarm(
+              `${userId}_${reminder.id}`,
+              reminder.medicationName,
+              reminder.medicationDosage,
+              reminder.times || ["08:00"], // ✅ times array
+              reminder.days, // ✅ day names
             );
           }
         }
@@ -605,6 +577,34 @@ export default function MedicationsScreen() {
 
     scheduleExistingReminders();
   }, [reminders, user?.uid]);
+
+  // Add this useEffect after your other useEffects
+  useEffect(() => {
+    const checkExpiredReminders = async () => {
+      const targetUserId =
+        userType === "caregiver" ? selectedPatientId : user?.uid;
+      if (!targetUserId) return;
+
+      for (const reminder of reminders) {
+        if (!reminder.enabled) continue;
+
+        if (!isReminderActive(reminder)) {
+          console.log(
+            `Auto-disabling expired reminder: ${reminder.medicationName}`,
+          );
+          await updateDoc(
+            doc(db, "users", targetUserId, "reminders", reminder.id),
+            {
+              enabled: false,
+            },
+          );
+          await cancelMedicationAlarm(`${targetUserId}_${reminder.id}`);
+        }
+      }
+    };
+
+    checkExpiredReminders();
+  }, [reminders, medications, takenLogs]);
 
   const loadReactions = useCallback(async () => {
     const targetUserId =
@@ -653,6 +653,39 @@ export default function MedicationsScreen() {
     const hours = String(date.getHours()).padStart(2, "0");
     const minutes = String(date.getMinutes()).padStart(2, "0");
     return `${hours}:${minutes}`;
+  };
+
+  // Add this after your other helper functions (after dateToTimeString)
+  const isReminderActive = (reminder: Reminder): boolean => {
+    if (!reminder.enabled) return false;
+
+    const now = new Date();
+
+    switch (reminder.durationType) {
+      case "date-range":
+        if (reminder.startDate && now < new Date(reminder.startDate))
+          return false;
+        if (reminder.endDate && now > new Date(reminder.endDate)) return false;
+        return true;
+
+      case "until-empty": {
+        const medication = medications.find(
+          (m) => m.id === reminder.medicationId,
+        );
+        if (!medication || !medication.quantity) return true; // No quantity = keep going
+        // Count how many times this medication has been taken
+        const takenCount = takenLogs.filter(
+          (log) =>
+            log.medicationId === reminder.medicationId ||
+            log.reminderId?.startsWith(reminder.id),
+        ).length;
+        return takenCount < medication.quantity;
+      }
+
+      case "none":
+      default:
+        return true; // No limit
+    }
   };
 
   // Medication search
@@ -898,57 +931,39 @@ export default function MedicationsScreen() {
         reminderId = docRef.id;
         Alert.alert("Success", "Reminder added");
       }
-
+      const savedReminder = { ...reminderData, id: reminderId } as Reminder;
+      if (!isReminderActive(savedReminder)) {
+        await updateDoc(
+          doc(db, "users", targetUserId, "reminders", reminderId),
+          {
+            enabled: false,
+          },
+        );
+        await cancelMedicationAlarm(`${targetUserId}_${reminderId}`);
+      }
       // ✅ Schedule the alarm if enabled
       if (reminderData.enabled && times.length > 0) {
-        for (const time of times) {
-          const [hours, minutes] = time.split(":").map(Number);
+        const targetUserId =
+          userType === "caregiver" ? selectedPatientId : user?.uid;
 
-          if (isOneTime && scheduledDate) {
-            // One-time reminder
-            const alarmTime = new Date(scheduledDate);
-            await scheduleMedicationAlarm(
-              `${targetUserId}_${reminderId}_${time}`,
-              reminderData.medicationName,
-              reminderData.medicationDosage,
-              alarmTime,
-              { repeat: false },
-            );
-          } else if (normalizedDays.length > 0) {
-            // Recurring reminder - schedule for each day
-            const alarmTime = new Date();
-            alarmTime.setHours(hours, minutes, 0, 0);
-
-            // Map days to weekday numbers (0 = Sunday, 1 = Monday, etc.)
-            const dayMap: { [key: string]: number } = {
-              Sun: 0,
-              Mon: 1,
-              Tue: 2,
-              Wed: 3,
-              Thu: 4,
-              Fri: 5,
-              Sat: 6,
-              Sunday: 0,
-              Monday: 1,
-              Tuesday: 2,
-              Wednesday: 3,
-              Thursday: 4,
-              Friday: 5,
-              Saturday: 6,
-            };
-
-            const weekdays = normalizedDays
-              .map((day) => dayMap[day])
-              .filter((d) => d !== undefined);
-
-            await scheduleMedicationAlarm(
-              `${targetUserId}_${reminderId}_${time}`,
-              reminderData.medicationName,
-              reminderData.medicationDosage,
-              alarmTime,
-              { repeat: true, weekdays },
-            );
-          }
+        if (isOneTime && scheduledDate) {
+          // One-time reminder - use times array and empty days
+          await scheduleMedicationAlarm(
+            `${targetUserId}_${reminderId}`,
+            reminderData.medicationName,
+            reminderData.medicationDosage,
+            times, // ✅ pass times array
+            [], // ✅ empty days = one-time
+          );
+        } else if (normalizedDays.length > 0) {
+          // Recurring reminder
+          await scheduleMedicationAlarm(
+            `${targetUserId}_${reminderId}`,
+            reminderData.medicationName,
+            reminderData.medicationDosage,
+            times, // ✅ pass times array
+            normalizedDays, // ✅ pass day names
+          );
         }
       }
 
@@ -1008,45 +1023,20 @@ export default function MedicationsScreen() {
           const [hours, minutes] = time.split(":").map(Number);
 
           if (isOneTime && reminder.scheduledDate) {
-            const alarmTime = new Date(reminder.scheduledDate);
             await scheduleMedicationAlarm(
-              `${targetUserId}_${id}_${time}`,
+              `${targetUserId}_${id}`,
               reminder.medicationName,
               reminder.medicationDosage,
-              alarmTime,
-              { repeat: false },
+              reminder.times || ["08:00"], // ✅ times array
+              [], // ✅ empty days
             );
           } else if (reminder.days && reminder.days.length > 0) {
-            const alarmTime = new Date();
-            alarmTime.setHours(hours, minutes, 0, 0);
-
-            const dayMap: { [key: string]: number } = {
-              Sun: 0,
-              Mon: 1,
-              Tue: 2,
-              Wed: 3,
-              Thu: 4,
-              Fri: 5,
-              Sat: 6,
-              Sunday: 0,
-              Monday: 1,
-              Tuesday: 2,
-              Wednesday: 3,
-              Thursday: 4,
-              Friday: 5,
-              Saturday: 6,
-            };
-
-            const weekdays = reminder.days
-              .map((day) => dayMap[day])
-              .filter((d) => d !== undefined);
-
             await scheduleMedicationAlarm(
-              `${targetUserId}_${id}_${time}`,
+              `${targetUserId}_${id}`,
               reminder.medicationName,
               reminder.medicationDosage,
-              alarmTime,
-              { repeat: true, weekdays },
+              reminder.times || ["08:00"], // ✅ times array
+              reminder.days, // ✅ day names
             );
           }
         }
@@ -1861,6 +1851,118 @@ export default function MedicationsScreen() {
                     ))}
                   </View>
                 </View>
+                {/* Show date inputs when "Date range" is selected */}
+                {reminderForm.durationType === "date-range" && (
+                  <>
+                    <View style={styles.formGroup}>
+                      <Text style={styles.label}>Start Date</Text>
+                      <TouchableOpacity
+                        style={styles.datePickerButton}
+                        onPress={() => setShowStartDatePicker(true)}
+                      >
+                        <Ionicons
+                          name="calendar-outline"
+                          size={20}
+                          color={Colors.primary}
+                        />
+                        <Text style={styles.datePickerButtonText}>
+                          {reminderForm.startDate
+                            ? new Date(
+                                reminderForm.startDate,
+                              ).toLocaleDateString()
+                            : "Select start date"}
+                        </Text>
+                      </TouchableOpacity>
+                      {showStartDatePicker && (
+                        <DateTimePicker
+                          value={
+                            reminderForm.startDate
+                              ? new Date(reminderForm.startDate)
+                              : new Date()
+                          }
+                          mode="date"
+                          display="default"
+                          onChange={(
+                            event: DateTimePickerEvent,
+                            selectedDate?: Date,
+                          ) => {
+                            setShowStartDatePicker(false);
+                            if (event.type === "dismissed" || !selectedDate)
+                              return;
+                            setReminderForm({
+                              ...reminderForm,
+                              startDate: selectedDate.toISOString(),
+                            });
+                          }}
+                        />
+                      )}
+                    </View>
+
+                    <View style={styles.formGroup}>
+                      <Text style={styles.label}>End Date</Text>
+                      <TouchableOpacity
+                        style={styles.datePickerButton}
+                        onPress={() => setShowEndDatePicker(true)}
+                      >
+                        <Ionicons
+                          name="calendar-outline"
+                          size={20}
+                          color={Colors.primary}
+                        />
+                        <Text style={styles.datePickerButtonText}>
+                          {reminderForm.endDate
+                            ? new Date(
+                                reminderForm.endDate,
+                              ).toLocaleDateString()
+                            : "Select end date"}
+                        </Text>
+                      </TouchableOpacity>
+                      {showEndDatePicker && (
+                        <DateTimePicker
+                          value={
+                            reminderForm.endDate
+                              ? new Date(reminderForm.endDate)
+                              : new Date()
+                          }
+                          mode="date"
+                          display="default"
+                          onChange={(
+                            event: DateTimePickerEvent,
+                            selectedDate?: Date,
+                          ) => {
+                            setShowEndDatePicker(false);
+                            if (event.type === "dismissed" || !selectedDate)
+                              return;
+                            setReminderForm({
+                              ...reminderForm,
+                              endDate: selectedDate.toISOString(),
+                            });
+                          }}
+                        />
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {/* Show info when "Until empty" is selected */}
+                {reminderForm.durationType === "until-empty" && (
+                  <View style={styles.formGroup}>
+                    <View style={styles.infoBox}>
+                      <Ionicons
+                        name="information-circle"
+                        size={20}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.infoText}>
+                        Reminders will stop when the medication quantity reaches
+                        zero.
+                        {selectedMedicationForReminder?.quantity
+                          ? ` Current quantity: ${selectedMedicationForReminder.quantity}`
+                          : " Set quantity in medication details."}
+                      </Text>
+                    </View>
+                  </View>
+                )}
               </ScrollView>
             )}
 
@@ -2526,5 +2628,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "500",
     color: Colors.text,
+  },
+  // Add to your StyleSheet
+  datePickerButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    gap: 8,
+  },
+  datePickerButtonText: {
+    fontSize: 14,
+    color: Colors.text,
+  },
+  infoBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    padding: 12,
+    backgroundColor: "#eff6ff",
+    borderRadius: 8,
+    gap: 8,
+  },
+  infoText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    flex: 1,
   },
 });
