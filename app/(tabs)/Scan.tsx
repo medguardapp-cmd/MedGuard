@@ -4,15 +4,15 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import React, { useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -419,7 +419,7 @@ export default function ScanScreen() {
             )}
 
             <View style={styles.resultActions}>
-              <TouchableOpacity
+              {/* <TouchableOpacity
                 style={styles.addBtn}
                 onPress={() => {
                   Alert.alert(
@@ -430,7 +430,6 @@ export default function ScanScreen() {
                       {
                         text: "Add",
                         onPress: () => {
-                          /* your add logic here */
                         },
                       },
                     ],
@@ -439,7 +438,7 @@ export default function ScanScreen() {
               >
                 <Ionicons name="add-circle-outline" size={18} color="#fff" />
                 <Text style={styles.addBtnText}>Add to My Medicines</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> */}
 
               <TouchableOpacity style={styles.scanAgainBtn} onPress={reset}>
                 <Ionicons
@@ -901,6 +900,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderRadius: 30,
     paddingVertical: 16,
+    paddingHorizontal: 18,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,

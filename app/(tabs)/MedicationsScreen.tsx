@@ -2508,7 +2508,6 @@ const styles = StyleSheet.create({
   },
   medCheckText: { fontSize: 14, color: Colors.text },
 
-  // Interaction warning specific
   interactionIntro: {
     fontSize: 14,
     color: Colors.textSecondary,
@@ -2553,7 +2552,6 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: "500",
   },
-  // Permission-based button styles
   disabledButton: {
     backgroundColor: Colors.textTertiary,
   },
