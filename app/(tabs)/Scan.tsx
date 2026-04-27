@@ -21,6 +21,7 @@ import Colors from "@/constants/colors";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface ScannedMedicine {
+  isMedicine: boolean;
   name: string | null;
   dosageMg: string | null;
   expirationDate: string | null;
@@ -28,7 +29,14 @@ interface ScannedMedicine {
   confidence: "high" | "low";
 }
 
-type ScanStatus = "idle" | "front_done" | "processing" | "done" | "error";
+type ScanStatus =
+  | "idle"
+  | "front_done"
+  | "processing"
+  | "retrying"
+  | "done"
+  | "not_medicine"
+  | "error";
 
 interface CapturedPhoto {
   base64: string;
@@ -39,7 +47,7 @@ interface CapturedPhoto {
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? "";
 
-// ─── GPT-4o Vision — accepts 1 or 2 images ───────────────────────────────────
+// ─── GPT-4o Vision — first pass ──────────────────────────────────────────────
 
 async function scanMedicineImages(
   front: CapturedPhoto,
@@ -86,7 +94,8 @@ async function scanMedicineImages(
 Labels may be in English, Filipino (Tagalog), or a mix of both.
 Combine information from all provided images to give the most complete result.
 Always respond with valid JSON only. No explanation, no markdown.
-If a field cannot be found in any of the images, set it to null.`,
+If a field cannot be found in any of the images, set it to null.
+If the image is NOT medicine packaging (e.g. food, household item, random object, blank surface), set isMedicine to false and all other fields to null.`,
         },
         {
           role: "user",
@@ -98,11 +107,105 @@ If a field cannot be found in any of the images, set it to null.`,
 Combine information from both sides if provided.
 Return JSON with exactly these fields:
 {
+  "isMedicine": true or false — is this actually medicine packaging?,
   "name": "brand name or generic name of the medicine",
   "dosageMg": "dosage strength e.g. 500mg, 10mg/5ml, 1g",
   "expirationDate": "expiration date in MM/YYYY or MM/DD/YYYY format",
   "rawText": "all visible text you can read from all the labels combined",
   "confidence": "high if clearly readable, low if blurry or partially visible"
+}`,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message);
+
+  const parsed = JSON.parse(data.choices[0].message.content ?? "{}");
+  return parsed as ScannedMedicine;
+}
+
+// ─── GPT-4o Vision — dark-text fallback retry ────────────────────────────────
+// Called when the first pass returns low confidence. Uses a more aggressive
+// prompt focused on squeezing out hard-to-read / dark / embossed text.
+
+async function retryWithEnhancedPrompt(
+  front: CapturedPhoto,
+  back?: CapturedPhoto,
+  previousRawText?: string,
+): Promise<ScannedMedicine> {
+  if (!OPENAI_API_KEY) throw new Error("OpenAI API key not set.");
+
+  const imageBlocks: object[] = [
+    {
+      type: "image_url",
+      image_url: {
+        url: `data:image/jpeg;base64,${front.base64}`,
+        detail: "high",
+      },
+    },
+  ];
+
+  if (back) {
+    imageBlocks.push({
+      type: "image_url",
+      image_url: {
+        url: `data:image/jpeg;base64,${back.base64}`,
+        detail: "high",
+      },
+    });
+  }
+
+  const contextHint = previousRawText
+    ? `A previous scan attempt read this partial text from the label: "${previousRawText}". Use it as context to help fill in any gaps.`
+    : "";
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert at reading difficult medicine labels — including dark backgrounds, embossed text, foil printing, blurry photos, and low-contrast ink.
+Your job is to extract medicine information even when the image quality is poor.
+Labels may be in English, Filipino (Tagalog), or both.
+${contextHint}
+Strategies to use:
+- Look for embossed or debossed date stamps (especially on blister packs or bottle necks)
+- Expiration dates are often printed as "EXP", "Best Before", "Exp. Date", "Petsa ng Pagkasira", or stamped directly onto foil
+- Look at the edges, bottom, and seams of packaging where dates are often inkjet-printed
+- For dark labels, look for any slight contrast difference that could be text
+- Generic medicine names often appear in smaller print below the brand name
+- Dosage may appear as mg, mcg, g, ml, IU, or % strength
+
+Always respond with valid JSON only. No explanation, no markdown.`,
+        },
+        {
+          role: "user",
+          content: [
+            ...imageBlocks,
+            {
+              type: "text",
+              text: `This is a second attempt to read a medicine label that was difficult to scan. Please try harder to read any dark, embossed, or low-contrast text.
+Pay special attention to expiration dates — check all edges, seams, and bottoms of the packaging.
+Return JSON with exactly these fields:
+{
+  "isMedicine": true or false,
+  "name": "brand or generic medicine name",
+  "dosageMg": "dosage strength",
+  "expirationDate": "expiration date in MM/YYYY or MM/DD/YYYY — if uncertain write your best guess with a ? suffix e.g. 03/2026?",
+  "rawText": "all text you can read including partial characters",
+  "confidence": "high or low"
 }`,
             },
           ],
@@ -154,6 +257,7 @@ export default function ScanScreen() {
   const [backPhoto, setBackPhoto] = useState<CapturedPhoto | null>(null);
   const [result, setResult] = useState<ScannedMedicine | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wasRetried, setWasRetried] = useState(false);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -189,6 +293,7 @@ export default function ScanScreen() {
     setBackPhoto(null);
     setResult(null);
     setError(null);
+    setWasRetried(false);
     fadeAnim.setValue(0);
     pulseAnim.setValue(1);
   };
@@ -232,14 +337,59 @@ export default function ScanScreen() {
     await processImages(frontPhoto!, undefined);
   };
 
-  // ── Core: send to GPT-4o ──────────────────────────────────────────────────
+  // ── Core: send to GPT-4o with optional dark-text retry ───────────────────
 
   const processImages = async (front: CapturedPhoto, back?: CapturedPhoto) => {
     try {
       setStatus("processing");
+      setWasRetried(false);
       startPulse();
 
-      const medicine = await scanMedicineImages(front, back);
+      let medicine = await scanMedicineImages(front, back);
+
+      // ── Not medicine: bail out early ──────────────────────────────────────
+      if (!medicine.isMedicine) {
+        pulseAnim.stopAnimation();
+        pulseAnim.setValue(1);
+        setResult(medicine);
+        setStatus("not_medicine");
+        fadeInResult();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        return;
+      }
+
+      // ── Low confidence: retry with enhanced dark-text prompt ──────────────
+      if (medicine.confidence === "low") {
+        setStatus("retrying");
+        const retry = await retryWithEnhancedPrompt(
+          front,
+          back,
+          medicine.rawText,
+        );
+        setWasRetried(true);
+
+        // Merge: prefer retry values but fall back to first-pass if retry is
+        // also null (belt-and-suspenders in case the retry gives less info)
+        medicine = {
+          isMedicine: retry.isMedicine ?? medicine.isMedicine,
+          name: retry.name ?? medicine.name,
+          dosageMg: retry.dosageMg ?? medicine.dosageMg,
+          expirationDate: retry.expirationDate ?? medicine.expirationDate,
+          rawText: retry.rawText || medicine.rawText,
+          confidence: retry.confidence,
+        };
+
+        // Re-check isMedicine after retry (edge case)
+        if (!medicine.isMedicine) {
+          pulseAnim.stopAnimation();
+          pulseAnim.setValue(1);
+          setResult(medicine);
+          setStatus("not_medicine");
+          fadeInResult();
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          return;
+        }
+      }
 
       pulseAnim.stopAnimation();
       pulseAnim.setValue(1);
@@ -258,6 +408,8 @@ export default function ScanScreen() {
 
   // ── UI ────────────────────────────────────────────────────────────────────
 
+  const isProcessing = status === "processing" || status === "retrying";
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
@@ -267,7 +419,9 @@ export default function ScanScreen() {
           {status === "idle" && "Scan the front of the packaging to start"}
           {status === "front_done" && "Now scan the back, or skip to process"}
           {status === "processing" && "Analyzing your scans…"}
+          {status === "retrying" && "Enhancing scan for hard-to-read text…"}
           {status === "done" && "Medicine identified successfully"}
+          {status === "not_medicine" && "No medicine packaging detected"}
           {status === "error" && "Something went wrong"}
         </Text>
       </View>
@@ -316,7 +470,9 @@ export default function ScanScreen() {
         )}
 
         {/* Scanner state card */}
-        <View style={styles.scanCard}>
+        <View
+          style={[styles.scanCard, status === "done" && styles.scanCardDone]}
+        >
           <View style={[styles.corner, styles.tl]} />
           <View style={[styles.corner, styles.tr]} />
           <View style={[styles.corner, styles.bl]} />
@@ -364,6 +520,49 @@ export default function ScanScreen() {
             </Animated.View>
           )}
 
+          {status === "retrying" && (
+            <Animated.View
+              style={[
+                styles.stateContent,
+                { transform: [{ scale: pulseAnim }] },
+              ]}
+            >
+              <ActivityIndicator size="large" color="#F39C12" />
+              <Text style={styles.stateTitle}>Enhancing scan…</Text>
+              <Text style={styles.stateHint}>
+                Text was hard to read — trying again with a deeper analysis
+              </Text>
+            </Animated.View>
+          )}
+
+          {status === "done" && frontPhoto && (
+            <View style={styles.scanCardDoneContent}>
+              <Image
+                source={{ uri: frontPhoto.uri }}
+                style={styles.scanCardDoneImage}
+                resizeMode="cover"
+              />
+              <View style={styles.scanCardOverlay} />
+              <View style={styles.scanCardBadge}>
+                <Ionicons name="checkmark-circle" size={15} color="#fff" />
+                <Text style={styles.scanCardBadgeText}>Scanned</Text>
+              </View>
+            </View>
+          )}
+
+          {status === "not_medicine" && (
+            <View style={styles.stateContent}>
+              <Ionicons name="close-circle-outline" size={56} color="#E74C3C" />
+              <Text style={[styles.stateTitle, { color: "#E74C3C" }]}>
+                Not a Medicine
+              </Text>
+              <Text style={styles.stateHint}>
+                No medicine packaging was detected in the photo. Please scan a
+                medicine label.
+              </Text>
+            </View>
+          )}
+
           {status === "error" && (
             <View style={styles.stateContent}>
               <Ionicons name="alert-circle-outline" size={56} color="#E74C3C" />
@@ -384,6 +583,11 @@ export default function ScanScreen() {
               {backPhoto && (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>Front + Back</Text>
+                </View>
+              )}
+              {wasRetried && (
+                <View style={styles.retriedBadge}>
+                  <Text style={styles.retriedBadgeText}>Enhanced Scan</Text>
                 </View>
               )}
               {result.confidence === "low" && (
@@ -418,28 +622,14 @@ export default function ScanScreen() {
               </Text>
             )}
 
-            <View style={styles.resultActions}>
-              {/* <TouchableOpacity
-                style={styles.addBtn}
-                onPress={() => {
-                  Alert.alert(
-                    "Add Medicine",
-                    `Add "${result.name ?? "this medicine"}" to your medications?`,
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Add",
-                        onPress: () => {
-                        },
-                      },
-                    ],
-                  );
-                }}
-              >
-                <Ionicons name="add-circle-outline" size={18} color="#fff" />
-                <Text style={styles.addBtnText}>Add to My Medicines</Text>
-              </TouchableOpacity> */}
+            {wasRetried && result.confidence === "high" && (
+              <Text style={styles.enhancedNote}>
+                ✨ Enhanced scan recovered additional details from hard-to-read
+                text.
+              </Text>
+            )}
 
+            <View style={styles.resultActions}>
               <TouchableOpacity style={styles.scanAgainBtn} onPress={reset}>
                 <Ionicons
                   name="refresh-outline"
@@ -449,6 +639,35 @@ export default function ScanScreen() {
                 <Text style={styles.scanAgainText}>Scan Again</Text>
               </TouchableOpacity>
             </View>
+          </Animated.View>
+        )}
+
+        {/* Not medicine — action card */}
+        {status === "not_medicine" && (
+          <Animated.View
+            style={[styles.notMedicineCard, { opacity: fadeAnim }]}
+          >
+            <Text style={styles.notMedicineTitle}>What to try</Text>
+            <TipRow
+              icon="medkit-outline"
+              text="Make sure you're scanning a medicine box, bottle, or blister pack"
+            />
+            <TipRow
+              icon="text-outline"
+              text="Aim at the side with the most text, including the brand name"
+            />
+            <TipRow
+              icon="sunny-outline"
+              text="Improve lighting so the label is clearly visible"
+            />
+            <TouchableOpacity style={styles.scanAgainBtn} onPress={reset}>
+              <Ionicons
+                name="refresh-outline"
+                size={18}
+                color={Colors.primary}
+              />
+              <Text style={styles.scanAgainText}>Try Again</Text>
+            </TouchableOpacity>
           </Animated.View>
         )}
 
@@ -516,7 +735,7 @@ export default function ScanScreen() {
           </View>
         )}
 
-        {status === "error" && (
+        {(status === "error" || status === "not_medicine") && (
           <TouchableOpacity
             style={styles.fab}
             onPress={reset}
@@ -728,6 +947,43 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
     position: "relative",
+    overflow: "hidden",
+  },
+  scanCardDone: {
+    height: 220,
+    padding: 0,
+  },
+  scanCardDoneContent: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  scanCardDoneImage: {
+    width: "100%",
+    height: "100%",
+  },
+  scanCardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.28)",
+  },
+  scanCardBadge: {
+    position: "absolute",
+    bottom: 14,
+    right: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(39,174,96,0.88)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  scanCardBadgeText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
   },
   corner: {
     position: "absolute",
@@ -776,14 +1032,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 19,
   },
-  retryBtn: {
-    marginTop: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: "#FEE8E6",
-  },
-  retryBtnText: { color: "#E74C3C", fontWeight: "600", fontSize: 14 },
 
   // Result card
   resultCard: {
@@ -814,6 +1062,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   badgeText: { fontSize: 11, color: "#27AE60", fontWeight: "600" },
+  retriedBadge: {
+    backgroundColor: "#FFF3E0",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  retriedBadgeText: { fontSize: 11, color: "#E65100", fontWeight: "600" },
   lowConfidenceBadge: {
     backgroundColor: "#FFF3CD",
     paddingHorizontal: 8,
@@ -842,6 +1097,15 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     lineHeight: 17,
   },
+  enhancedNote: {
+    fontSize: 12,
+    color: "#1B5E20",
+    backgroundColor: "#E8F5E9",
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 14,
+    lineHeight: 17,
+  },
   resultActions: { gap: 10, marginTop: 4 },
   addBtn: {
     backgroundColor: Colors.primary,
@@ -865,6 +1129,24 @@ const styles = StyleSheet.create({
   },
   scanAgainText: { color: Colors.primary, fontWeight: "600", fontSize: 14 },
 
+  // Not medicine card
+  notMedicineCard: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+    gap: 12,
+  },
+  notMedicineTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1A1A2E",
+    marginBottom: 4,
+  },
+
   // Tips
   tipsCard: {
     backgroundColor: "#fff",
@@ -883,7 +1165,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   tipRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  tipText: { fontSize: 13, color: "#666" },
+  tipText: { fontSize: 13, color: "#666", flex: 1 },
 
   // FAB
   fabContainer: {

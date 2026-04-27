@@ -627,7 +627,7 @@ export default function LoginScreen() {
 
             <View style={styles.iconBadge}>
               <Image
-                source={require("../../assets/images/medguard.png")}
+                source={require("../../assets/images/medguard-blue.png")}
                 style={{ width: 36, height: 36 }}
                 resizeMode="contain"
               />

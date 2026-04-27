@@ -943,45 +943,63 @@ export default function HomeScreen() {
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     if (isPastDay) {
-      const pastReminders = getRemindersForDate(
-        normalizedDate,
-        reminders,
-        medications,
-      );
-      const missedForDate = missedLogs.filter((l) => l.dateKey === dk);
+      // ✅ BUILD FROM LOGS, not from active reminders
+      // This way disabled/deleted reminders still appear for past dates
 
-      const scheduledItems: ScheduleItem[] = pastReminders.flatMap((r) => {
-        return (r.times || ["08:00"]).map((time) => {
-          // Check for time-specific reminderId first, then fallback to base ID
-          const timeSpecificId = `${r.id}_${time}`;
-          const takenLog = logsForDate.find(
-            (l) => l.reminderId === timeSpecificId || l.reminderId === r.id,
-          );
-          const wasMissed =
-            !takenLog &&
-            missedForDate.some(
-              (m) => m.reminderId === r.id && m.scheduledTime === time,
-            );
-
+      // 1. Start with taken logs for this date
+      const takenItems: ScheduleItem[] = logsForDate
+        .filter((l) => l.reminderId !== "quick-take")
+        .map((l) => {
+          const scheduledTime = l.takenAt?.toDate
+            ? l.takenAt.toDate().toTimeString().slice(0, 5)
+            : "00:00";
           return {
-            reminderId: r.id,
-            medicationId: r.medicationId,
-            name: r.medicationName,
-            dosage: r.medicationDosage,
-            time,
-            taken: !!takenLog,
-            missed: wasMissed,
+            reminderId: l.reminderId,
+            medicationId: l.medicationId,
+            name: l.name,
+            dosage: l.dosage,
+            time: scheduledTime,
+            taken: true,
+            missed: false,
+            missedSoft: false,
             late: false,
-            takenLogId: takenLog?.id,
-            takenVariance: takenLog ? getTakenVariance(time, takenLog) : null,
+            takenLogId: l.id,
+            takenVariance: getTakenVariance(scheduledTime, l),
             hasInteraction: false,
             interactionSeverity: null,
             interactionCount: 0,
           };
         });
-      });
 
-      // Include quick-takes from taken_logs
+      // 2. Add missed log entries that have no corresponding taken log
+      const missedForDate = missedLogs.filter((l) => l.dateKey === dk);
+      const missedItems: ScheduleItem[] = missedForDate
+        .filter(
+          (m) =>
+            !logsForDate.some(
+              (l) =>
+                l.reminderId === `${m.reminderId}_${m.scheduledTime}` ||
+                l.reminderId === m.reminderId,
+            ),
+        )
+        .map((m) => ({
+          reminderId: m.reminderId,
+          medicationId: m.medicationId,
+          name: m.name,
+          dosage: m.dosage,
+          time: m.scheduledTime,
+          taken: false,
+          missed: true,
+          missedSoft: false,
+          late: false,
+          takenLogId: undefined,
+          takenVariance: null,
+          hasInteraction: false,
+          interactionSeverity: null,
+          interactionCount: 0,
+        }));
+
+      // 3. Quick-takes
       const quickTakes: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId === "quick-take")
         .map((l) => ({
@@ -994,6 +1012,7 @@ export default function HomeScreen() {
             : "00:00",
           taken: true,
           missed: false,
+          missedSoft: false,
           late: false,
           takenLogId: l.id,
           takenVariance: null,
@@ -1002,7 +1021,7 @@ export default function HomeScreen() {
           interactionCount: 0,
         }));
 
-      const all = [...scheduledItems, ...quickTakes];
+      const all = [...takenItems, ...missedItems, ...quickTakes];
       all.sort((a, b) => a.time.localeCompare(b.time));
       setSchedule(all);
       return;

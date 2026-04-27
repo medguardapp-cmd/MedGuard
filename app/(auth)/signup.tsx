@@ -387,7 +387,7 @@ export default function SignupScreen() {
             </TouchableOpacity>
             <View style={styles.iconBadge}>
               <Image
-                source={require("../../assets/images/medguard.png")}
+                source={require("../../assets/images/medguard-bg.png")}
                 style={{ width: 36, height: 36 }}
                 resizeMode="contain"
               />

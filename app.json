@@ -4,44 +4,38 @@
     "slug": "MedGuard",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/medguard.png",
+    "icon": "./assets/images/medguard-bg.png",
     "scheme": "medguard",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "UIBackgroundModes": [
-          "remote-notification"
-        ]
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/medguard.png",
+        "foregroundImage": "./assets/images/medguard-bg.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.medguard.MedGuard",
-      "permissions": [
-        "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE",
-        "WAKE_LOCK"
-      ]
+      "permissions": ["RECEIVE_BOOT_COMPLETED", "VIBRATE", "WAKE_LOCK"]
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/medguard.png"
+      "favicon": "./assets/images/medguard-bg.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/medguard.png",
+          "image": "./assets/images/medguard-bg.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
@@ -55,9 +49,7 @@
         "expo-notifications",
         {
           "color": "#4A70A9",
-          "sounds": [
-            "./assets/sounds/alarm.mp3"
-          ]
+          "sounds": ["./assets/sounds/alarm.mp3"]
         }
       ],
       "expo-mail-composer"

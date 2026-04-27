@@ -85,7 +85,6 @@ Always recommend consulting a doctor or pharmacist for serious concerns.
 Respond ONLY with valid JSON: { "type": "text", "text": "Your response here", "data": null }`;
 
 // ─── Levenshtein distance ─────────────────────────────────────────────────────
-// Used for fuzzy drug name matching (handles typos like "bigesic" → "Biogesic").
 
 function levenshtein(a: string, b: string): number {
   const m = a.length;
@@ -103,15 +102,12 @@ function levenshtein(a: string, b: string): number {
   }
   return dp[m][n];
 }
-// Soundex phonetic encoding for better typo handling
+
 function soundex(word: string): string {
   const s = word.toUpperCase();
   if (!s.length) return "";
-
   const firstChar = s[0];
   const codes: string[] = [];
-
-  // Soundex mapping
   const map: Record<string, string> = {
     BFPV: "1",
     CGJKQSXZ: "2",
@@ -120,7 +116,6 @@ function soundex(word: string): string {
     MN: "5",
     R: "6",
   };
-
   for (let i = 1; i < s.length; i++) {
     let found = false;
     for (const [group, code] of Object.entries(map)) {
@@ -132,8 +127,6 @@ function soundex(word: string): string {
     }
     if (!found) codes.push("0");
   }
-
-  // Remove duplicates and truncate
   let result = firstChar;
   let lastCode = "";
   for (const code of codes) {
@@ -143,29 +136,23 @@ function soundex(word: string): string {
     }
     if (result.length === 4) break;
   }
-
   return result.padEnd(4, "0");
 }
-// Returns the closest known drug name if within the edit-distance threshold,
-// otherwise returns the original name unchanged.
-// Enhanced fuzzy matching with multiple strategies
+
 function enhancedFuzzyMatch(
   input: string,
   candidates: { name: string; canonical: string }[],
 ): string | null {
   const normalizedInput = input.toLowerCase().trim();
 
-  // Strategy 1: Exact match (case-insensitive)
   const exact = candidates.find((c) => c.name === normalizedInput);
   if (exact) return exact.canonical;
 
-  // Strategy 2: Contains match (user typed part of the name)
   const contains = candidates.find(
     (c) => c.name.includes(normalizedInput) || normalizedInput.includes(c.name),
   );
   if (contains) return contains.canonical;
 
-  // Strategy 3: Levenshtein with adaptive threshold
   let bestMatch: { candidate: string; dist: number; canonical: string } | null =
     null;
   const inputLen = normalizedInput.length;
@@ -185,13 +172,11 @@ function enhancedFuzzyMatch(
     return bestMatch.canonical;
   }
 
-  // Strategy 4: Soundex/phonetic matching for common typos
   const inputSoundex = soundex(normalizedInput);
   const phoneticMatches = candidates.filter(
     (c) => soundex(c.name) === inputSoundex,
   );
   if (phoneticMatches.length > 0) {
-    // Pick the shortest name (usually the most common brand)
     const bestPhonetic = phoneticMatches.sort(
       (a, b) => a.name.length - b.name.length,
     )[0];
@@ -207,14 +192,11 @@ function enhancedFuzzyMatch(
 function fuzzyCorrectDrugName(input: string): string {
   if (!knownDrugNames.length) return input;
 
-  // Split multi-word inputs intelligently
   const words = input.split(/\s+/);
   if (words.length > 1) {
-    // Try matching the whole phrase first
     const fullMatch = enhancedFuzzyMatch(input, knownDrugNames);
     if (fullMatch) return fullMatch;
 
-    // Then try matching individual words that might be drug names
     const correctedWords = words.map((word) => {
       const match = enhancedFuzzyMatch(word, knownDrugNames);
       return match || word;
@@ -226,7 +208,6 @@ function fuzzyCorrectDrugName(input: string): string {
   return match || input;
 }
 
-// Populate knownDrugNames from ph_medicine_mapping (brand + generic columns).
 async function ensureDrugNamesCache(): Promise<void> {
   const now = Date.now();
   if (knownDrugNames.length && now - knownDrugNamesLoadedAt < DRUG_NAMES_TTL_MS)
@@ -253,7 +234,6 @@ async function ensureDrugNamesCache(): Promise<void> {
           canonical: row.generic_name,
         });
     }
-    // Deduplicate by lowercase name
     const seen = new Set<string>();
     knownDrugNames = entries.filter(({ name }) => {
       if (seen.has(name)) return false;
@@ -268,17 +248,6 @@ async function ensureDrugNamesCache(): Promise<void> {
 }
 
 // ─── Gibberish / off-topic guard ──────────────────────────────────────────────
-//
-// Three checks — ALL fast and local, no API call:
-//   1. Gibberish: high consonant-cluster density with no vowels → meaningless input
-//   2. Very short non-word: 1-3 chars that aren't a known abbreviation
-//   3. Off-topic via keyword blacklist (the LLM handles edge cases gracefully
-//      but this stops obvious non-health queries before any API calls fire)
-
-const HEALTH_KEYWORDS_RE =
-  /\b(med(ication|s|icine)?|drug|dose|dosage|pill|tablet|capsule|injection|syrup|vitamin|supplement|side.?effect|interact|allerg|prescri|pharmacist|doctor|nurse|hospital|clinic|symptom|condition|treat|therapy|health|pain|fever|headache|cough|cold|flu|blood|pressure|sugar|glucose|diabetes|hypertension|heart|kidney|liver|stomach|nausea|vomit|diarrhea|constipat|infect|antibiotic|antiviral|antifungal|miss|refill|reminder|schedule|taken|dose|overdose|poison|emergency|pregnant|breastfeed|brand|generic|available|biogesic|paracetamol|ibuprofen|aspirin|amoxicillin|cetirizine|losartan|metformin|atorvastatin|omeprazole|salbutamol|amlodipine|simvastatin|azithromycin)\b/i;
-// Simple consonant-run detector — 5+ consonants in a row with no vowels signals gibberish
-const GIBBERISH_RE = /[^aeiou\s\d\W]{5,}/i;
 
 async function classifyInputAI(
   message: string,
@@ -314,24 +283,17 @@ Examples:
 "asdjkhqwe" -> gibberish
             `,
           },
-          {
-            role: "user",
-            content: message,
-          },
+          { role: "user", content: message },
         ],
       }),
     });
 
     if (!res.ok) return "health";
-
     const json = await res.json();
-
     const raw =
       json.choices?.[0]?.message?.content?.trim().toLowerCase() || "health";
-
     if (raw.includes("gibberish")) return "gibberish";
     if (raw.includes("off-topic")) return "off-topic";
-
     return "health";
   } catch {
     return "health";
@@ -353,6 +315,9 @@ async function fetchDrugsByIds(drugIds: string[]): Promise<any[]> {
 }
 
 // ─── Helper: format one drug entry for GPT context ───────────────────────────
+// NOTE: Only passes fields a patient actually needs. Raw clinical dumps
+// (mechanism_of_action, absorption, half_life, metabolism) are excluded here
+// so GPT doesn't regurgitate them verbatim as a wall of text.
 
 function formatDrug(drug: any, mapping: any | null, label = "DRUG"): string {
   const brands = mapping?.ph_brand ?? "N/A";
@@ -362,29 +327,15 @@ function formatDrug(drug: any, mapping: any | null, label = "DRUG"): string {
   return `${label}: ${drug?.name ?? genericName}
   PH brand(s): ${brands}
   PH generic name: ${genericName}
-  DrugBank name: ${drug?.name ?? "N/A"}
-  Combination: ${isCombo ? `Yes -- ingredients: ${ingredients}` : "No"}
-  Drug class: ${drug?.class ?? "N/A"} | Subclass: ${drug?.subclass ?? "N/A"}
-  Groups: ${drug?.groups ?? "N/A"}
-  Indication: ${drug?.indication ?? "N/A"}
-  Pharmacodynamics: ${drug?.pharmacodynamics ?? "N/A"}
-  Mechanism of action: ${drug?.mechanism_of_action ?? "N/A"}
-  Side effects / Toxicity: ${drug?.toxicity ?? "N/A"}
-  Absorption: ${drug?.absorption ?? "N/A"}
-  Half-life: ${drug?.half_life ?? "N/A"}
-  Metabolism: ${drug?.metabolism ?? "N/A"}
-  Description: ${drug?.description ?? "N/A"}`;
+  Combination drug: ${isCombo ? `Yes (${ingredients})` : "No"}
+  Drug class: ${drug?.class ?? "N/A"}
+  What it's used for: ${drug?.indication ?? "N/A"}
+  Side effects / warnings: ${drug?.toxicity ?? "N/A"}`;
 }
 
 // ─── 1. NLP drug name extraction with fuzzy correction ───────────────────────
-//
-// Step A — GPT extracts any drug/vitamin names mentioned in the message.
-// Step B — Each extracted name is fuzzy-matched against knownDrugNames so that
-//          typos ("bigesic", "biogesick", "paracetamole") resolve to the correct
-//          canonical name before the Supabase lookup fires.
 
 async function extractDrugNamesFromMessage(message: string): Promise<string[]> {
-  // Populate fuzzy cache in parallel while GPT runs
   await ensureDrugNamesCache();
 
   try {
@@ -424,9 +375,7 @@ async function extractDrugNamesFromMessage(message: string): Promise<string[]> {
     const parsed = JSON.parse(raw);
     const rawDrugs: string[] = parsed.drugs ?? [];
 
-    // Fuzzy-correct each extracted name against known PH drug names
     const corrected = rawDrugs.map(fuzzyCorrectDrugName);
-    // Deduplicate after correction (e.g. "bigesic" + "biogesic" → one "Biogesic")
     const unique = [...new Set(corrected)];
 
     console.log(
@@ -633,7 +582,7 @@ async function fetchMedicationContext(meds: MedDoc[]): Promise<string> {
         .map((id) => {
           const drug = drugs.find((d) => d.id === id);
           if (!drug) return null;
-          return `  INGREDIENT ${drug.name}:\n    Indication: ${drug.indication ?? "N/A"}\n    Side effects: ${drug.toxicity ?? "N/A"}\n    Half-life: ${drug.half_life ?? "N/A"}\n    Mechanism: ${drug.mechanism_of_action ?? "N/A"}`;
+          return `  INGREDIENT ${drug.name}:\n    Used for: ${drug.indication ?? "N/A"}\n    Side effects: ${drug.toxicity ?? "N/A"}`;
         })
         .filter(Boolean)
         .join("\n");
@@ -711,18 +660,6 @@ async function buildSystemPrompt(uid: string): Promise<string> {
     if (m.is_combination && m.ingredients?.length)
       parts.push(`(${m.ingredients.join(" + ")})`);
     return parts.join(" ");
-  });
-
-  console.log("📋 [Prompt] Building with:", {
-    name,
-    age,
-    gender,
-    bloodType,
-    height,
-    weight,
-    conditions,
-    allergies,
-    medSummary,
   });
 
   const today = new Date();
@@ -811,133 +748,111 @@ async function buildSystemPrompt(uid: string): Promise<string> {
       .join("\n\n");
   }
 
-  return `You are MEADGUARD, a professional clinical medication assistant in a mobile health app.
-You have access to the patient's medical profile, a verified Philippine (PH) medication database,
-and the patient's real-time medication schedule for today.
+  return `You are MEADGUARD, a friendly but professional medication assistant in a mobile health app.
+You help patients understand their medicines in simple, clear language.
 
 ════════════════════════════════════════════════════
-DATABASE-FIRST RULES (HIGHEST PRIORITY — NEVER OVERRIDE)
+RESPONSE STYLE — READ THIS FIRST, ALWAYS FOLLOW
 ════════════════════════════════════════════════════
-1. ALL drug information MUST come from the database context provided in this prompt
-   or from ADDITIONAL DRUG INFORMATION blocks injected by the system.
-2. NEVER invent, assume, or hallucinate drug names, side effects, dosages,
-   interactions, or any clinical data. If it is not in the context, say:
-   "I don't have that drug in the database. Please consult your pharmacist."
-3. When the database context IS provided, use it VERBATIM for clinical facts.
-   You may rephrase for clarity but must not change the clinical meaning.
-4. You are a medication and health assistant.
+You are talking to a regular patient on their phone, NOT a medical professional.
 
-You can answer ANY questions related to:
-- medications (including brands, generic names, availability, uses)
-- health conditions and symptoms
-- drug interactions and safety
-- general wellness advice
+TONE & LENGTH:
+- Write like a knowledgeable friend, not a textbook.
+- Keep responses SHORT and conversational. 2-4 sentences for simple questions.
+- Use plain Filipino/English that anyone can understand.
+- Never use technical jargon (mechanism of action, pharmacodynamics, half-life, etc.)
+  unless the patient specifically asks for it.
 
-If a question is loosely related to medications (e.g. asking about brands,
-generic names, or availability of a drug like paracetamol), you SHOULD answer it.
+WHAT TO INCLUDE (pick only what's relevant to the question):
+- What the medicine is used for (1 sentence)
+- Common side effects IF asked or if there's a safety concern (2-3 max, plain words)
+- Any interaction with the patient's current medications (only if there is one)
+- A brief safety note if needed
 
-Only refuse if the question is clearly unrelated to health (e.g. sports, coding, finance).
-   - If the user's message appears to be gibberish, typos with no recognisable
-     health term, or completely unintelligible, ask them to rephrase clearly.
-5. When a drug name appears misspelled but a corrected name is provided in
-   ADDITIONAL DRUG INFORMATION, use the corrected (database) name in your response
-   and silently treat it as the intended drug. Do not lecture the patient about spelling.
+WHAT TO NEVER INCLUDE UNLESS ASKED:
+- Mechanism of action
+- Pharmacodynamics / pharmacokinetics
+- Absorption, half-life, metabolism
+- DrugBank IDs or technical database fields
+- Long lists of every possible side effect
+- The full patient profile repeated back
 
-6. You support multi-turn conversation.
+FORMATTING:
+- Use short paragraphs, not walls of text.
+- Bullet points only when listing 3+ items (e.g. multiple side effects).
+- Maximum 5 bullet points per response.
+- If you want to mention a brand name, just say it naturally in a sentence.
 
-If the user asks to:
-- simplify your previous answer
-- explain in easier terms
-- summarize
-- rephrase
-- make it shorter or clearer
+TYPOS: If the patient misspells a drug name (e.g. "bigesic", "parcetamol"),
+silently use the correct name in your response. Do NOT say "did you mean" or
+comment on the spelling at all — just answer about the correct drug naturally.
+════════════════════════════════════════════════════
 
-You MUST reuse the previous response and rewrite it accordingly.
-
-Do NOT ask for clarification unless the request is unclear.
+DATABASE-FIRST RULES
+════════════════════════════════════════════════════
+1. ALL drug facts MUST come from the database context in this prompt.
+2. NEVER invent drug names, side effects, dosages, or interactions.
+   If the drug isn't in the database, say: "I don't have info on that medicine.
+   Please check with your pharmacist."
+3. Use database facts but translate them into plain language for the patient.
+4. You support multi-turn conversation. If asked to simplify or shorten,
+   rewrite your previous answer accordingly.
 ════════════════════════════════════════════════════
 
 PATIENT PROFILE
 Name: ${name}
 Age: ${age} | Gender: ${gender} | Date of birth: ${dob}
 Blood type: ${bloodType} | Height: ${height} cm | Weight: ${weight} kg
-All active medications in profile (NOT necessarily all due today — use TODAY'S SCHEDULE below): ${medSummary.length ? medSummary.join("; ") : "None recorded"}
+Active medications: ${medSummary.length ? medSummary.join("; ") : "None recorded"}
 Allergies: ${allergies.length ? allergies.join(", ") : "None recorded"}
 Medical conditions: ${conditions.length ? conditions.join(", ") : "None recorded"}
 ${notes ? `Clinical notes: ${notes}` : ""}
 
 TODAY'S SCHEDULE (${todayDate})
 =========================================
-Scheduled for today (${todayReminders.length} reminder${todayReminders.length !== 1 ? "s" : ""}):
+Scheduled today (${todayReminders.length} reminder${todayReminders.length !== 1 ? "s" : ""}):
 ${scheduledLines.join("\n")}
 
-Already taken today (${takenSnap.docs.length} dose${takenSnap.docs.length !== 1 ? "s" : ""}):
+Already taken today:
 ${takenLines.join("\n")}
 
-Missed -- scheduled but not taken yet (${missedReminders.length}):
-${missedReminders.length ? missedLines.join("\n") : "  None missed -- all caught up!"}
+Missed — scheduled but not yet taken (${missedReminders.length}):
+${missedReminders.length ? missedLines.join("\n") : "  None — all caught up!"}
 =========================================
 
-CRITICAL SCHEDULE RULES (OVERRIDE ALL OTHER CONTEXT):
-- "Today's medications" = STRICTLY ONLY the ${todayReminders.length} item(s) in the scheduled list above.
-- DO NOT include medications from "All active medications in profile" that are not in today's scheduled list.
-- There are exactly ${todayReminders.length} medication(s) scheduled for today. Return exactly that many.
-- Set each medication's "taken" field to true if it appears in "Already taken today", false otherwise.
-- "Missed doses" = ONLY the ${missedReminders.length} item(s) in the missed list above.
-- A medication not in today's scheduled list was NOT due today -- never report it.
-- If no reminders are scheduled for today, say so honestly.
+SCHEDULE RULES:
+- "Today's medications" = ONLY the ${todayReminders.length} item(s) above.
+- Set "taken": true for meds in the "Already taken" list, false otherwise.
+- Never report medications not in today's schedule as due today.
 
-MEDICATION DATABASE (patient's current drugs with ingredient breakdown)
+MEDICATION DATABASE (patient's current drugs)
 ${medContext || "No database records found for current medications."}
 
 KNOWN INTERACTIONS BETWEEN CURRENT MEDICATIONS
 ${interactionContext || "No interactions found between current medications."}
 
-AI REACTIONS ANALYSIS (from Reactions tab — same data the patient sees):
-${reactionsContext || "No reactions analysis available yet. Patient should open the Reactions tab to generate it."}
-When asked about drug interactions or side effects, use the AI REACTIONS ANALYSIS above.
-It already contains plain-language explanations — use them directly in your answer.
+AI REACTIONS ANALYSIS:
+${reactionsContext || "No reactions analysis available yet."}
 
-CLINICAL INSTRUCTIONS
-- Always personalise answers to ${name}: ${age}-year-old ${gender}.
-- Conditions: ${conditions.join(", ") || "none"} -- factor into every answer.
-- Allergies: ${allergies.join(", ") || "none"} -- flag conflicts immediately.
-- Weight ${weight} kg, height ${height} cm -- use for dosage context.
-- When ADDITIONAL DRUG INFORMATION is provided below, use it to answer the question.
-  That data was fetched from the database specifically for this query — treat it as ground truth.
-- For side effects and interactions, always refer to ingredient-level data (DrugBank names), not brand name alone.
-- Use PH brand names in responses so the patient recognises them.
-- Keep responses concise and in plain language.
-- End serious warnings with: "Please consult your doctor or pharmacist."
-- Do NOT repeat the full patient profile unless asked.
-- NEVER invent drug information. Only use what is in this prompt or additional context.
+SCOPE:
+- Answer anything about medications, health, symptoms, drug interactions, wellness.
+- For off-topic questions (weather, sports, finance), politely say you only handle health topics.
+- For gibberish, ask the patient to rephrase their health question.
 
-SCOPE RULES
-- You ONLY answer questions about: medications, health conditions, symptoms, drug interactions,
-  dosages, side effects, medical reminders, and general wellness advice.
-- For ANYTHING outside this scope (weather, recipes, coding, sports, finance, etc.),
-  respond with type "text" and politely explain you are a medication assistant only.
-- For gibberish or completely unintelligible input, respond with type "text" asking
-  the user to rephrase their question about their medications or health.
-
-RESPONSE FORMAT
-Respond ONLY with valid JSON. The "text" field must always be a non-empty string.
+RESPONSE FORMAT — Respond ONLY with valid JSON:
 {
   "type": "text" | "medication" | "health" | "suggestion",
-  "text": "Your main response -- always a non-empty string",
-  "data": <optional -- omit if not needed>
+  "text": "Your friendly, plain-language response here (ALWAYS non-empty)",
+  "data": <only include if needed, see shapes below>
 }
 
 data shapes:
-- "medication"  -> [{ "name": string, "dosage": string, "time": string, "taken": boolean, "note": string }]
-  RULE: For today's meds, return EXACTLY the ${todayReminders.length} item(s) from the scheduled list above.
-  Do NOT add medications from "All active medications in profile" that aren't in the scheduled list.
-  Set "taken": true for medications in the "Already taken" list, false otherwise.
-- "health" (interactions) -> data MUST be { "interactions": [...] } -- NEVER put interactions at the top level
-  Example: { "type": "health", "text": "...", "data": { "interactions": [{ "meds": ["DrugA","DrugB"], "severity": "moderate", "advice": "..." }] } }
-- "health" (metrics)      -> [{ "type": string, "value": string, "unit": string, "trend": "up"|"down"|"stable" }]
-- "suggestion"  -> string[]
-- "text"        -> null`;
+- "medication" -> [{ "name": string, "dosage": string, "time": string, "taken": boolean, "note": string }]
+  Return EXACTLY the ${todayReminders.length} scheduled item(s). No extras.
+- "health" (interactions) -> { "interactions": [{ "meds": ["DrugA","DrugB"], "severity": "moderate", "advice": "plain language advice" }] }
+- "health" (metrics) -> [{ "type": string, "value": string, "unit": string, "trend": "up"|"down"|"stable" }]
+- "suggestion" -> string[] (plain language tips, max 4 items)
+- "text" -> null`;
 }
 
 // ─── 8. Preload ───────────────────────────────────────────────────────────────
@@ -946,7 +861,6 @@ export async function preloadUserContext(uid: string): Promise<void> {
   if (!uid || cachedUid === uid) return;
   console.log("🔵 [OpenAI] Preloading context for uid:", uid);
   try {
-    // Preload profile AND drug names cache in parallel
     await Promise.all([getUserProfile(uid), ensureDrugNamesCache()]);
     cachedUid = uid;
     console.log("✅ [OpenAI] Context preloaded -- chat ready");
@@ -955,11 +869,11 @@ export async function preloadUserContext(uid: string): Promise<void> {
     cachedUid = uid;
   }
 }
+
 // Quick brand lookup for common patterns like "brand of biogesic"
 async function quickBrandLookup(
   userMessage: string,
 ): Promise<AIResponse | null> {
-  // Pattern: "brand of X", "X brand", "what brands", "anong brand", "available brands"
   const brandPatterns = [
     /brands? of (\w+)/i,
     /(\w+) brands?/i,
@@ -967,7 +881,7 @@ async function quickBrandLookup(
     /anong brand (?:ng|ang) (\w+)/i,
     /available brands? of (\w+)/i,
     /(\w+) available brands?/i,
-    /(?:meron bang|may) brand (?:ng|na) (\w+)/i, // Tagalog: "meron bang brand ng..."
+    /(?:meron bang|may) brand (?:ng|na) (\w+)/i,
   ];
 
   let drugName: string | null = null;
@@ -981,11 +895,8 @@ async function quickBrandLookup(
 
   if (!drugName) return null;
 
-  // Apply fuzzy correction to the extracted drug name
   await ensureDrugNamesCache();
   const correctedDrug = fuzzyCorrectDrugName(drugName);
-
-  // If correction changed significantly, try both
   const searchTerms =
     correctedDrug !== drugName ? [correctedDrug, drugName] : [drugName];
 
@@ -1007,57 +918,9 @@ async function quickBrandLookup(
       if (brands.length > 0) {
         return {
           type: "text",
-          text: `For ${genericNames[0] || term}:\n\nAvailable brands in the Philippines: ${brands.join(", ")}.\n\nAlways check with your pharmacist for current availability.`,
+          text: `${genericNames[0] || term} is available in the Philippines under these brands: ${brands.join(", ")}. Check with your pharmacy for what's available near you.`,
         };
       }
-    }
-  }
-
-  return null;
-}
-
-// Check if user just typed a drug name with typos - AUTO-LOOKUP
-async function quickDrugCheck(
-  userMessage: string,
-  uid: string,
-): Promise<AIResponse | null> {
-  // Only trigger for short messages (likely just a drug name)
-  if (userMessage.length < 3 || userMessage.length > 40) return null;
-
-  // Skip if it has spaces (could be a sentence)
-  if (userMessage.includes(" ") && userMessage.split(" ").length > 2)
-    return null;
-
-  await ensureDrugNamesCache();
-  const corrected = fuzzyCorrectDrugName(userMessage);
-
-  if (corrected !== userMessage) {
-    console.log(`🔍 [Typo] "${userMessage}" → "${corrected}"`);
-
-    // Get patient's current medications for interaction checking
-    const profile = await getUserProfile(uid);
-    const meds = profile?.medications ?? [];
-    const patientDrugIds = [
-      ...new Set(
-        meds.flatMap((m) =>
-          m.is_combination && m.drug_ids?.length
-            ? m.drug_ids
-            : m.drug_id
-              ? [m.drug_id]
-              : [],
-        ),
-      ),
-    ];
-
-    // ACTUALLY LOOK UP THE DRUG
-    const drugInfo = await lookupDrugByName(corrected, patientDrugIds);
-
-    if (drugInfo) {
-      // Return the actual drug information, not just a "did you mean"
-      return {
-        type: "text",
-        text: `You asked about "${userMessage}" (did you mean **${corrected}**?)\n\n${drugInfo}`,
-      };
     }
   }
 
@@ -1079,7 +942,7 @@ export async function sendChatMessage(
   userMessage: string,
 ): Promise<AIResponse> {
   try {
-    // ── Step 0: Fast local guard (no API calls) ─────────────────────────────
+    // ── Step 0: Fast guard ──────────────────────────────────────────────────
     const inputClass = await classifyInputAI(userMessage);
 
     if (inputClass === "gibberish") {
@@ -1099,23 +962,18 @@ export async function sendChatMessage(
     const brandResponse = await quickBrandLookup(userMessage);
     if (brandResponse) return brandResponse;
 
-    // ── Step 0.6: Quick drug typo check ─────────────────────────────────────
-    const typoResponse = await quickDrugCheck(userMessage, uid);
-    if (typoResponse) return typoResponse;
-
-    // ── Step 1: Build fresh prompt + NLP extraction in parallel ────────────
+    // ── Step 1: Build prompt + NLP extraction in parallel ──────────────────
     const [freshPrompt, extractedDrugs] = await Promise.all([
       buildSystemPrompt(uid).catch(() => FALLBACK_PROMPT),
       extractDrugNamesFromMessage(userMessage),
     ]);
+
     // ── BRAND QUERY SHORTCUT ───────────────────────────────────────────────
     if (
       extractedDrugs.length &&
       /(brand|brands|available|what brand|anong brand)/i.test(userMessage)
     ) {
       const drug = extractedDrugs[0];
-
-      // Apply fuzzy correction to the extracted drug
       const correctedDrug = fuzzyCorrectDrugName(drug);
 
       const { data, error } = await supabase
@@ -1128,22 +986,21 @@ export async function sendChatMessage(
         const brands = [
           ...new Set(data.map((row) => row.ph_brand).filter(Boolean)),
         ];
-
         if (brands.length > 0) {
           return {
             type: "text",
-            text: `${correctedDrug} brands include: ${brands.join(", ")}.`,
+            text: `${correctedDrug} is available under these brands: ${brands.join(", ")}.`,
           };
         }
       }
 
-      // If no results, offer help
       return {
         type: "text",
-        text: `I couldn't find "${drug}" in my database. Did you mean something else? Try typing the generic name or check your spelling.`,
+        text: `I couldn't find "${drug}" in my database. Try the generic name or double-check the spelling.`,
       };
     }
-    // ── Step 2: Get patient drug IDs for interaction checking ───────────────
+
+    // ── Step 2: Get patient drug IDs ────────────────────────────────────────
     const profile = await getUserProfile(uid);
     const meds = profile?.medications ?? [];
     const patientDrugIds = [
@@ -1161,7 +1018,7 @@ export async function sendChatMessage(
     // ── Step 3: Fetch DB context for mentioned drugs ────────────────────────
     const liveContext = await fetchLiveContext(extractedDrugs, patientDrugIds);
 
-    // ── Step 4: Build messages array ────────────────────────────────────────
+    // ── Step 4: Build messages ──────────────────────────────────────────────
     const messages: ChatMessage[] = [
       { role: "system", content: freshPrompt },
       ...(liveContext
@@ -1169,12 +1026,12 @@ export async function sendChatMessage(
             {
               role: "system" as const,
               content:
-                `ADDITIONAL DRUG INFORMATION FROM DATABASE (source: Supabase -- verified, DB-first):\n\n` +
+                `ADDITIONAL DRUG INFORMATION FROM DATABASE:\n\n` +
                 `${liveContext}\n\n` +
-                `IMPORTANT: The drug name(s) above are the CORRECT canonical names from the database. ` +
-                `If the patient typed a slightly different spelling, use the name(s) shown above in your response. ` +
-                `Use this data as the sole source of truth for side effects, interactions, and clinical facts. ` +
-                `Do NOT supplement with information not present in this block.`,
+                `IMPORTANT: Use this data as your source of truth. ` +
+                `Translate the clinical facts above into simple, friendly language the patient can understand. ` +
+                `Do NOT copy technical field names or dump raw text. ` +
+                `Answer only what the patient asked — don't volunteer all fields at once.`,
             },
           ]
         : []),
@@ -1191,7 +1048,7 @@ export async function sendChatMessage(
       body: JSON.stringify({
         model: MODEL,
         messages,
-        max_tokens: 800,
+        max_tokens: 500, // reduced from 800 — forces concise responses
         temperature: 0.3,
         response_format: { type: "json_object" },
       }),
@@ -1208,7 +1065,6 @@ export async function sendChatMessage(
     console.log("✅ [OpenAI] Response:", raw.slice(0, 300));
     const parsed = JSON.parse(raw);
 
-    // Normalise data -- GPT sometimes returns interactions at top level
     let data = parsed.data ?? undefined;
     if (parsed.type === "medication" && !Array.isArray(data)) {
       data = Array.isArray(parsed.medications) ? parsed.medications : [];
@@ -1407,9 +1263,7 @@ export async function generateReactionsAnalysis(
     })
     .join("\n");
 
-  // ✅ ADD THE MISSING OPENAI CALL HERE
   const systemPrompt = `You are a clinical medication analysis AI. Analyze the patient's medications and provide a comprehensive report.
-
 
 PATIENT PROFILE:
 Name: ${name}
@@ -1504,16 +1358,12 @@ Return ONLY valid JSON with this exact structure:
 
     const analysis = JSON.parse(raw) as ReactionsAnalysis;
 
-    // Cache the result
     await setDoc(doc(db, "users", uid, "reactions_cache", "latest"), {
       ...analysis,
       lastUpdated: new Date(),
     });
 
-    return {
-      ...analysis,
-      lastUpdated: new Date(),
-    };
+    return { ...analysis, lastUpdated: new Date() };
   } catch (error: any) {
     console.error("❌ [Reactions] Error:", error.message);
     return {
