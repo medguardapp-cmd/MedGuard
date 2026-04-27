@@ -169,7 +169,7 @@ function enhancedFuzzyMatch(
   let bestMatch: { candidate: string; dist: number; canonical: string } | null =
     null;
   const inputLen = normalizedInput.length;
-  const maxDist = Math.max(1, Math.floor(inputLen / 3)); // More permissive: 1 per 3 chars
+  const maxDist = Math.max(2, Math.floor(inputLen / 2));
 
   for (const { name, canonical } of candidates) {
     const dist = levenshtein(normalizedInput, name);
@@ -345,9 +345,7 @@ async function fetchDrugsByIds(drugIds: string[]): Promise<any[]> {
   const { data, error } = await supabase
     .from("drugs")
     .select(
-      "id, name, state, groups, class, subclass, description, indication, " +
-        "pharmacodynamics, mechanism_of_action, toxicity, absorption, " +
-        "half_life, metabolism, protein_binding, route_of_elimination",
+      "id, name, indication, mechanism_of_action, toxicity, class, subclass",
     )
     .in("id", drugIds);
   if (error) console.warn("⚠️ [Supabase] fetchDrugsByIds:", error.message);
@@ -456,7 +454,7 @@ async function lookupDrugByName(
         "id, drug_id, ph_brand, generic_name, drug_ids, ingredients, is_combination",
       )
       .or(`ph_brand.ilike.%${drugName}%,generic_name.ilike.%${drugName}%`)
-      .limit(5);
+      .limit(1);
     if (mapErr) console.warn("⚠️ [Supabase] mapping:", mapErr.message);
 
     let allIngredientIds: string[] = [];
