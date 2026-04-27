@@ -1,9 +1,7 @@
 // services/notificationService.ts
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { sendLocalNotification } from "../lib/notifications";
 
-// Helper function
 const formatTime12h = (time: string) => {
   const [hours, minutes] = time.split(":");
   const hour = parseInt(hours);
@@ -12,7 +10,6 @@ const formatTime12h = (time: string) => {
   return `${hour12}:${minutes} ${ampm}`;
 };
 
-// Get interaction severity
 const getInteractionSeverity = (description: string): "mild" | "severe" => {
   const lower = description?.toLowerCase() || "";
   const severeKeywords = [
@@ -34,125 +31,101 @@ const getInteractionSeverity = (description: string): "mild" | "severe" => {
 export const checkMissedAndLateDoses = async (
   reminders: any[],
   takenLogs: any[],
-  addNotification: (notification: any) => void,
+  addNotification: (n: any) => void,
   notifiedLateRef: React.MutableRefObject<Set<string>>,
   notifiedMissedRef: React.MutableRefObject<Set<string>>,
 ) => {
   const today = new Date();
   const todayKey = today.toDateString();
-  const currentMinutes = today.getHours() * 60 + today.getMinutes();
-
   const todayTaken = takenLogs.filter((log) => log.dateKey === todayKey);
 
   for (const reminder of reminders) {
     if (!reminder.enabled) continue;
 
-    for (const time of reminder.times || ["08:00"]) {
+    for (const time of reminder.times ?? ["08:00"]) {
       const [hours, minutes] = time.split(":").map(Number);
+      const scheduled = new Date();
+      scheduled.setHours(hours, minutes, 0, 0);
 
-      const scheduledDateTime = new Date();
-      scheduledDateTime.setHours(hours, minutes, 0, 0);
-
-      const now = new Date();
-      const isToday = scheduledDateTime.toDateString() === now.toDateString();
-
-      if (!isToday) continue;
-
-      // 🚫 Ignore if scheduled time is in the future
-      if (scheduledDateTime > now) continue;
+      if (scheduled.toDateString() !== today.toDateString()) continue;
+      if (scheduled > today) continue;
 
       const diffMinutes = Math.floor(
-        (now.getTime() - scheduledDateTime.getTime()) / 60000,
+        (today.getTime() - scheduled.getTime()) / 60_000,
       );
-
-      // Only check TODAY logs
       const isTaken = todayTaken.some(
         (log) =>
           log.reminderId === reminder.id ||
           log.reminderId === `${reminder.id}_${time}`,
       );
-
       if (isTaken) continue;
 
       const key = `${reminder.id}_${time}_${todayKey}`;
 
-      // 🚫 Prevent duplicate notifications per day
       if (
         notifiedLateRef.current.has(key) ||
         notifiedMissedRef.current.has(key)
-      ) {
+      )
         continue;
-      }
 
-      // ✅ Late (15–59 min)
       if (diffMinutes >= 15 && diffMinutes < 60) {
         notifiedLateRef.current.add(key);
-
         addNotification({
           title: "⏰ Dose Late",
           message: `${reminder.medicationName} (${reminder.medicationDosage}) was scheduled for ${formatTime12h(time)}`,
           type: "warning",
           data: { reminderId: reminder.id, type: "late" },
+          // ✅ No sendPush — late dose is low-priority; in-app only
         });
-
         continue;
       }
 
-      // ✅ Missed (60+ min ONLY TODAY)
       if (diffMinutes >= 60) {
         notifiedMissedRef.current.add(key);
-
         addNotification({
           title: "❌ Dose Missed",
           message: `You missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)}`,
           type: "error",
           data: { reminderId: reminder.id, type: "missed" },
+          sendPush: true, // ✅ missed dose → push if backgrounded
+          channelId: "medications",
         });
       }
     }
   }
 };
 
-// 2. Check for consecutive missed days (3+ days)
+// 2. Check for consecutive missed days
 export const checkConsecutiveMissedDays = async (
   reminders: any[],
   takenLogs: any[],
-  addNotification: (notification: any) => void,
+  addNotification: (n: any) => void,
   notifiedConsecutiveRef: React.MutableRefObject<Set<string>>,
 ) => {
-  const CONSECUTIVE_DAYS_THRESHOLD = 3;
+  const THRESHOLD = 3;
 
   for (const reminder of reminders) {
     if (!reminder.enabled) continue;
+    if (notifiedConsecutiveRef.current.has(reminder.id)) continue;
 
     let missedDays = 0;
-    let currentDate = new Date();
+    const now = new Date();
 
-    // Check last 7 days
     for (let i = 0; i < 7; i++) {
-      const checkDate = new Date(currentDate);
-      checkDate.setDate(currentDate.getDate() - i);
-      const dateKey = checkDate.toDateString();
-
-      const wasTaken = takenLogs.some(
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const dateKey = d.toDateString();
+      const taken = takenLogs.some(
         (log) =>
           log.dateKey === dateKey &&
           (log.reminderId === reminder.id ||
             log.medicationId === reminder.medicationId),
       );
-
-      if (!wasTaken) {
-        missedDays++;
-      } else {
-        break; // Break streak
-      }
+      if (!taken) missedDays++;
+      else break;
     }
 
-    // Notify if missed for X consecutive days
-    if (
-      missedDays >= CONSECUTIVE_DAYS_THRESHOLD &&
-      !notifiedConsecutiveRef.current.has(reminder.id)
-    ) {
+    if (missedDays >= THRESHOLD) {
       notifiedConsecutiveRef.current.add(reminder.id);
       addNotification({
         title: "⚠️ Medication Adherence Alert",
@@ -163,165 +136,141 @@ export const checkConsecutiveMissedDays = async (
           type: "consecutive-missed",
           days: missedDays,
         },
+        sendPush: true, // ✅ context decides whether to fire OS push
+        channelId: "medications",
       });
-      await sendLocalNotification(
-        "⚠️ Medication Adherence Alert",
-        `You've missed ${reminder.medicationName} for ${missedDays} days. Please take your medication as prescribed.`,
-        { reminderId: reminder.id, type: "consecutive-missed" },
-      );
+      // ❌ Removed standalone sendLocalNotification — context handles it
     }
   }
 };
 
-// 3. Check for severe medication interactions
+// 3. Check for severe drug interactions
 export const checkSevereInteractions = async (
   medications: any[],
   interactions: any[],
-  addNotification: (notification: any) => void,
+  addNotification: (n: any) => void,
   notifiedInteractionsRef: React.MutableRefObject<Set<string>>,
 ) => {
   for (const interaction of interactions) {
-    const severity = getInteractionSeverity(interaction.description);
-    if (severity === "severe") {
-      const med1 = medications.find((m) => m.drug_id === interaction.drug_id);
-      const med2 = medications.find(
-        (m) => m.drug_id === interaction.interacts_with,
-      );
-      const key = `${interaction.drug_id}_${interaction.interacts_with}`;
+    if (getInteractionSeverity(interaction.description) !== "severe") continue;
 
-      if (!notifiedInteractionsRef.current.has(key)) {
-        notifiedInteractionsRef.current.add(key);
-        addNotification({
-          title: "⚠️ Severe Drug Interaction",
-          message: `${med1?.name || interaction.drug_id} may interact severely with ${med2?.name || interaction.interacts_with}. Consult your doctor.`,
-          type: "error",
-          data: {
-            type: "severe-interaction",
-            drug1: interaction.drug_id,
-            drug2: interaction.interacts_with,
-            description: interaction.description,
-          },
-        });
-        await sendLocalNotification(
-          "⚠️ Severe Drug Interaction Alert",
-          `Potential severe interaction between your medications. Please check the Reactions tab.`,
-          { type: "severe-interaction" },
-          "interactions",
-        );
-      }
-    }
+    const key = `${interaction.drug_id}_${interaction.interacts_with}`;
+    if (notifiedInteractionsRef.current.has(key)) continue;
+
+    notifiedInteractionsRef.current.add(key);
+    const med1 = medications.find((m) => m.drug_id === interaction.drug_id);
+    const med2 = medications.find(
+      (m) => m.drug_id === interaction.interacts_with,
+    );
+
+    addNotification({
+      title: "⚠️ Severe Drug Interaction",
+      message: `${med1?.name ?? interaction.drug_id} may interact severely with ${med2?.name ?? interaction.interacts_with}. Consult your doctor.`,
+      type: "error",
+      data: {
+        type: "severe-interaction",
+        drug1: interaction.drug_id,
+        drug2: interaction.interacts_with,
+        description: interaction.description,
+      },
+      sendPush: true,
+      channelId: "interactions",
+    });
   }
 };
 
 // 4. Check for caregiver connection requests (for patients)
 export const checkCaregiverRequests = async (
   userId: string,
-  addNotification: (notification: any) => void,
+  addNotification: (n: any) => void,
   notifiedRequestsRef: React.MutableRefObject<Set<string>>,
 ) => {
   try {
-    const requestsQuery = query(
-      collection(db, "caregiver_requests"),
-      where("patientId", "==", userId),
-      where("status", "==", "pending"),
+    const snap = await getDocs(
+      query(
+        collection(db, "caregiver_requests"),
+        where("patientId", "==", userId),
+        where("status", "==", "pending"),
+      ),
     );
 
-    const snapshot = await getDocs(requestsQuery);
-
-    for (const doc of snapshot.docs) {
+    for (const doc of snap.docs) {
+      if (notifiedRequestsRef.current.has(doc.id)) continue;
+      notifiedRequestsRef.current.add(doc.id);
       const request = doc.data();
-      const requestId = doc.id;
 
-      if (!notifiedRequestsRef.current.has(requestId)) {
-        notifiedRequestsRef.current.add(requestId);
-        addNotification({
-          title: "👤 Caregiver Request",
-          message: `${request.caregiverName} wants to connect as your caregiver.`,
-          type: "info",
-          data: {
-            type: "caregiver-request",
-            requestId,
-            caregiverId: request.caregiverId,
-          },
-        });
-        await sendLocalNotification(
-          "👤 Caregiver Connection Request",
-          `${request.caregiverName} wants to help manage your medications.`,
-          { type: "caregiver-request", requestId },
-        );
-      }
+      addNotification({
+        title: "👤 Caregiver Request",
+        message: `${request.caregiverName} wants to connect as your caregiver.`,
+        type: "info",
+        data: {
+          type: "caregiver-request",
+          requestId: doc.id,
+          caregiverId: request.caregiverId,
+        },
+        sendPush: true,
+        channelId: "general",
+      });
     }
   } catch (error) {
     console.error("Error checking caregiver requests:", error);
   }
 };
 
-// 5. Check for caregiver's patient missed doses (for caregivers)
+// 5. Check patient missed doses (for caregivers)
 export const checkCaregiverPatientMissedDoses = async (
   patients: { id: string; name: string }[],
-  addNotification: (notification: any) => void,
+  addNotification: (n: any) => void,
   caregiverNotifiedMissedRef: React.MutableRefObject<Set<string>>,
 ) => {
   const today = new Date();
   const todayKey = today.toDateString();
-  const currentMinutes = today.getHours() * 60 + today.getMinutes();
 
   for (const patient of patients) {
     try {
-      // Get patient's taken logs for today
-      const takenLogsQuery = query(
-        collection(db, "users", patient.id, "taken_logs"),
-        where("dateKey", "==", todayKey),
-      );
-      const takenSnapshot = await getDocs(takenLogsQuery);
-      const takenLogs = takenSnapshot.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-      }));
+      const [takenSnap, remindersSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, "users", patient.id, "taken_logs"),
+            where("dateKey", "==", todayKey),
+          ),
+        ),
+        getDocs(
+          query(
+            collection(db, "users", patient.id, "reminders"),
+            where("enabled", "==", true),
+          ),
+        ),
+      ]);
 
-      // Get patient's reminders
-      const remindersQuery = query(
-        collection(db, "users", patient.id, "reminders"),
-        where("enabled", "==", true),
-      );
-      const remindersSnapshot = await getDocs(remindersQuery);
-      const reminders = remindersSnapshot.docs.map((d) => ({
+      const takenLogs = takenSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const reminders = remindersSnap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       }));
 
       for (const reminder of reminders) {
-        for (const time of reminder.times || ["08:00"]) {
+        for (const time of reminder.times ?? ["08:00"]) {
           const [hours, minutes] = time.split(":").map(Number);
-          const scheduledDateTime = new Date();
-          scheduledDateTime.setHours(hours, minutes, 0, 0);
+          const scheduled = new Date();
+          scheduled.setHours(hours, minutes, 0, 0);
 
-          const now = new Date();
-          const isToday =
-            scheduledDateTime.toDateString() === now.toDateString();
-
-          if (!isToday) continue;
-          if (scheduledDateTime > now) continue;
+          if (scheduled.toDateString() !== today.toDateString()) continue;
+          if (scheduled > today) continue;
 
           const diffMinutes = Math.floor(
-            (now.getTime() - scheduledDateTime.getTime()) / 60000,
+            (today.getTime() - scheduled.getTime()) / 60_000,
           );
-
           const isTaken = takenLogs.some(
             (log) =>
               log.reminderId === reminder.id ||
               log.reminderId === `${reminder.id}_${time}`,
           );
-
           const missedKey = `${patient.id}_${reminder.id}_${time}_${todayKey}`;
 
-          // Notify caregiver if patient missed dose (60+ minutes late)
-          if (isTaken) continue;
+          if (isTaken || caregiverNotifiedMissedRef.current.has(missedKey))
+            continue;
 
-          // 🚫 prevent duplicate per day
-          if (caregiverNotifiedMissedRef.current.has(missedKey)) continue;
-
-          // ✅ missed today only
           if (diffMinutes >= 60) {
             caregiverNotifiedMissedRef.current.add(missedKey);
             addNotification({
@@ -333,12 +282,9 @@ export const checkCaregiverPatientMissedDoses = async (
                 patientId: patient.id,
                 reminderId: reminder.id,
               },
+              sendPush: true,
+              channelId: "medications",
             });
-            await sendLocalNotification(
-              "⚠️ Patient Missed Medication",
-              `${patient.name} missed their ${reminder.medicationName} dose.`,
-              { type: "patient-missed", patientId: patient.id },
-            );
           }
         }
       }

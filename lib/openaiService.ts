@@ -103,29 +103,127 @@ function levenshtein(a: string, b: string): number {
   }
   return dp[m][n];
 }
+// Soundex phonetic encoding for better typo handling
+function soundex(word: string): string {
+  const s = word.toUpperCase();
+  if (!s.length) return "";
 
+  const firstChar = s[0];
+  const codes: string[] = [];
+
+  // Soundex mapping
+  const map: Record<string, string> = {
+    BFPV: "1",
+    CGJKQSXZ: "2",
+    DT: "3",
+    L: "4",
+    MN: "5",
+    R: "6",
+  };
+
+  for (let i = 1; i < s.length; i++) {
+    let found = false;
+    for (const [group, code] of Object.entries(map)) {
+      if (group.includes(s[i])) {
+        codes.push(code);
+        found = true;
+        break;
+      }
+    }
+    if (!found) codes.push("0");
+  }
+
+  // Remove duplicates and truncate
+  let result = firstChar;
+  let lastCode = "";
+  for (const code of codes) {
+    if (code !== lastCode && code !== "0") {
+      result += code;
+      lastCode = code;
+    }
+    if (result.length === 4) break;
+  }
+
+  return result.padEnd(4, "0");
+}
 // Returns the closest known drug name if within the edit-distance threshold,
 // otherwise returns the original name unchanged.
+// Enhanced fuzzy matching with multiple strategies
+function enhancedFuzzyMatch(
+  input: string,
+  candidates: { name: string; canonical: string }[],
+): string | null {
+  const normalizedInput = input.toLowerCase().trim();
+
+  // Strategy 1: Exact match (case-insensitive)
+  const exact = candidates.find((c) => c.name === normalizedInput);
+  if (exact) return exact.canonical;
+
+  // Strategy 2: Contains match (user typed part of the name)
+  const contains = candidates.find(
+    (c) => c.name.includes(normalizedInput) || normalizedInput.includes(c.name),
+  );
+  if (contains) return contains.canonical;
+
+  // Strategy 3: Levenshtein with adaptive threshold
+  let bestMatch: { candidate: string; dist: number; canonical: string } | null =
+    null;
+  const inputLen = normalizedInput.length;
+  const maxDist = Math.max(1, Math.floor(inputLen / 3)); // More permissive: 1 per 3 chars
+
+  for (const { name, canonical } of candidates) {
+    const dist = levenshtein(normalizedInput, name);
+    if (dist <= maxDist && (!bestMatch || dist < bestMatch.dist)) {
+      bestMatch = { candidate: name, dist, canonical };
+    }
+  }
+
+  if (bestMatch && bestMatch.dist <= maxDist) {
+    console.log(
+      `🔤 [Enhanced] "${input}" → "${bestMatch.canonical}" (dist ${bestMatch.dist})`,
+    );
+    return bestMatch.canonical;
+  }
+
+  // Strategy 4: Soundex/phonetic matching for common typos
+  const inputSoundex = soundex(normalizedInput);
+  const phoneticMatches = candidates.filter(
+    (c) => soundex(c.name) === inputSoundex,
+  );
+  if (phoneticMatches.length > 0) {
+    // Pick the shortest name (usually the most common brand)
+    const bestPhonetic = phoneticMatches.sort(
+      (a, b) => a.name.length - b.name.length,
+    )[0];
+    console.log(
+      `🔊 [Phonetic] "${input}" → "${bestPhonetic.canonical}" (Soundex: ${inputSoundex})`,
+    );
+    return bestPhonetic.canonical;
+  }
+
+  return null;
+}
+
 function fuzzyCorrectDrugName(input: string): string {
   if (!knownDrugNames.length) return input;
-  const lower = input.toLowerCase().trim();
-  // Allow at most ceil(len/4) edits — roughly 1 per 4 chars (e.g. 7-char word → 2 edits)
-  const maxDist = Math.ceil(lower.length / 4);
-  let best: { dist: number; canonical: string } = {
-    dist: Infinity,
-    canonical: input,
-  };
-  for (const { name, canonical } of knownDrugNames) {
-    const dist = levenshtein(lower, name.toLowerCase());
-    if (dist < best.dist) best = { dist, canonical };
+
+  // Split multi-word inputs intelligently
+  const words = input.split(/\s+/);
+  if (words.length > 1) {
+    // Try matching the whole phrase first
+    const fullMatch = enhancedFuzzyMatch(input, knownDrugNames);
+    if (fullMatch) return fullMatch;
+
+    // Then try matching individual words that might be drug names
+    const correctedWords = words.map((word) => {
+      const match = enhancedFuzzyMatch(word, knownDrugNames);
+      return match || word;
+    });
+    return correctedWords.join(" ");
   }
-  if (best.dist <= maxDist && best.dist > 0) {
-    console.log(
-      `🔤 [Fuzzy] "${input}" → "${best.canonical}" (dist ${best.dist})`,
-    );
-    return best.canonical;
-  }
-  return input;
+
+  const match = enhancedFuzzyMatch(input, knownDrugNames);
+  return match || input;
 }
 
 // Populate knownDrugNames from ph_medicine_mapping (brand + generic columns).
@@ -178,33 +276,66 @@ async function ensureDrugNamesCache(): Promise<void> {
 //      but this stops obvious non-health queries before any API calls fire)
 
 const HEALTH_KEYWORDS_RE =
-  /\b(med(ication|s|icine)?|drug|dose|dosage|pill|tablet|capsule|injection|syrup|vitamin|supplement|side.?effect|interact|allerg|prescri|pharmacist|doctor|nurse|hospital|clinic|symptom|condition|treat|therapy|health|pain|fever|headache|cough|cold|flu|blood|pressure|sugar|glucose|diabetes|hypertension|heart|kidney|liver|stomach|nausea|vomit|diarrhea|constipat|infect|antibiotic|antiviral|antifungal|miss|refill|reminder|schedule|taken|dose|overdose|poison|emergency|pregnant|breastfeed|allerg|biogesic|paracetamol|ibuprofen|aspirin|amoxicillin|cetirizine|losartan|metformin|atorvastatin|omeprazole|salbutamol|amlodipine|simvastatin|azithromycin)\b/i;
-
+  /\b(med(ication|s|icine)?|drug|dose|dosage|pill|tablet|capsule|injection|syrup|vitamin|supplement|side.?effect|interact|allerg|prescri|pharmacist|doctor|nurse|hospital|clinic|symptom|condition|treat|therapy|health|pain|fever|headache|cough|cold|flu|blood|pressure|sugar|glucose|diabetes|hypertension|heart|kidney|liver|stomach|nausea|vomit|diarrhea|constipat|infect|antibiotic|antiviral|antifungal|miss|refill|reminder|schedule|taken|dose|overdose|poison|emergency|pregnant|breastfeed|brand|generic|available|biogesic|paracetamol|ibuprofen|aspirin|amoxicillin|cetirizine|losartan|metformin|atorvastatin|omeprazole|salbutamol|amlodipine|simvastatin|azithromycin)\b/i;
 // Simple consonant-run detector — 5+ consonants in a row with no vowels signals gibberish
 const GIBBERISH_RE = /[^aeiou\s\d\W]{5,}/i;
 
-function classifyInput(text: string): "health" | "off-topic" | "gibberish" {
-  const trimmed = text.trim();
+async function classifyInputAI(
+  message: string,
+): Promise<"health" | "off-topic" | "gibberish"> {
+  try {
+    const res = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0,
+        max_tokens: 10,
+        messages: [
+          {
+            role: "system",
+            content: `
+You classify user messages for a medication app.
 
-  // Gibberish: mostly consonants, no spaces, no meaning
-  const noSpaces = trimmed.replace(/\s+/g, "");
-  const vowelRatio =
-    (noSpaces.match(/[aeiou]/gi) ?? []).length / (noSpaces.length || 1);
-  if (vowelRatio < 0.1 && noSpaces.length > 4) return "gibberish";
-  if (GIBBERISH_RE.test(trimmed) && !HEALTH_KEYWORDS_RE.test(trimmed))
-    return "gibberish";
+Return ONLY one word:
 
-  // Very short input with no recognisable health content
-  if (trimmed.length < 4 && !HEALTH_KEYWORDS_RE.test(trimmed))
-    return "gibberish";
+health      = medications, symptoms, wellness, hospitals, brands, generic names, side effects, dosage, supplements
+off-topic   = unrelated topics like coding, sports, finance, movies, travel
+gibberish   = nonsense, unreadable, random letters
 
-  // Off-topic keyword patterns
-  const offTopicRe =
-    /\b(weather|recipe|cook|sport|football|basketball|code|program|javascript|python|math|calcul|history|geography|movie|music|song|game|politics|stock|crypto|bitcoin|finance|invest|travel|hotel|flight|restaurant|joke|trivia|news)\b/i;
-  if (offTopicRe.test(trimmed) && !HEALTH_KEYWORDS_RE.test(trimmed))
-    return "off-topic";
+Examples:
+"What brands of paracetamol?" -> health
+"Can I take Biogesic?" -> health
+"bitcoin price" -> off-topic
+"who won nba" -> off-topic
+"asdjkhqwe" -> gibberish
+            `,
+          },
+          {
+            role: "user",
+            content: message,
+          },
+        ],
+      }),
+    });
 
-  return "health";
+    if (!res.ok) return "health";
+
+    const json = await res.json();
+
+    const raw =
+      json.choices?.[0]?.message?.content?.trim().toLowerCase() || "health";
+
+    if (raw.includes("gibberish")) return "gibberish";
+    if (raw.includes("off-topic")) return "off-topic";
+
+    return "health";
+  } catch {
+    return "health";
+  }
 }
 
 // ─── Helper: fetch drugs by DrugBank IDs ─────────────────────────────────────
@@ -696,15 +827,36 @@ DATABASE-FIRST RULES (HIGHEST PRIORITY — NEVER OVERRIDE)
    "I don't have that drug in the database. Please consult your pharmacist."
 3. When the database context IS provided, use it VERBATIM for clinical facts.
    You may rephrase for clarity but must not change the clinical meaning.
-4. You are a MEDICATION AND HEALTH assistant ONLY.
-   - If the user's message is clearly unrelated to medications, health, symptoms,
-     or medical conditions, respond politely that you can only help with
-     medication and health-related questions.
+4. You are a medication and health assistant.
+
+You can answer ANY questions related to:
+- medications (including brands, generic names, availability, uses)
+- health conditions and symptoms
+- drug interactions and safety
+- general wellness advice
+
+If a question is loosely related to medications (e.g. asking about brands,
+generic names, or availability of a drug like paracetamol), you SHOULD answer it.
+
+Only refuse if the question is clearly unrelated to health (e.g. sports, coding, finance).
    - If the user's message appears to be gibberish, typos with no recognisable
      health term, or completely unintelligible, ask them to rephrase clearly.
 5. When a drug name appears misspelled but a corrected name is provided in
    ADDITIONAL DRUG INFORMATION, use the corrected (database) name in your response
    and silently treat it as the intended drug. Do not lecture the patient about spelling.
+
+6. You support multi-turn conversation.
+
+If the user asks to:
+- simplify your previous answer
+- explain in easier terms
+- summarize
+- rephrase
+- make it shorter or clearer
+
+You MUST reuse the previous response and rewrite it accordingly.
+
+Do NOT ask for clarification unless the request is unclear.
 ════════════════════════════════════════════════════
 
 PATIENT PROFILE
@@ -805,6 +957,114 @@ export async function preloadUserContext(uid: string): Promise<void> {
     cachedUid = uid;
   }
 }
+// Quick brand lookup for common patterns like "brand of biogesic"
+async function quickBrandLookup(
+  userMessage: string,
+): Promise<AIResponse | null> {
+  // Pattern: "brand of X", "X brand", "what brands", "anong brand", "available brands"
+  const brandPatterns = [
+    /brands? of (\w+)/i,
+    /(\w+) brands?/i,
+    /what brands? (?:is|are|for) (\w+)/i,
+    /anong brand (?:ng|ang) (\w+)/i,
+    /available brands? of (\w+)/i,
+    /(\w+) available brands?/i,
+    /(?:meron bang|may) brand (?:ng|na) (\w+)/i, // Tagalog: "meron bang brand ng..."
+  ];
+
+  let drugName: string | null = null;
+  for (const pattern of brandPatterns) {
+    const match = userMessage.match(pattern);
+    if (match) {
+      drugName = match[1];
+      break;
+    }
+  }
+
+  if (!drugName) return null;
+
+  // Apply fuzzy correction to the extracted drug name
+  await ensureDrugNamesCache();
+  const correctedDrug = fuzzyCorrectDrugName(drugName);
+
+  // If correction changed significantly, try both
+  const searchTerms =
+    correctedDrug !== drugName ? [correctedDrug, drugName] : [drugName];
+
+  for (const term of searchTerms) {
+    const { data, error } = await supabase
+      .from("ph_medicine_mapping")
+      .select("ph_brand, generic_name")
+      .or(`ph_brand.ilike.%${term}%,generic_name.ilike.%${term}%`)
+      .limit(30);
+
+    if (!error && data && data.length > 0) {
+      const brands = [
+        ...new Set(data.map((row) => row.ph_brand).filter(Boolean)),
+      ];
+      const genericNames = [
+        ...new Set(data.map((row) => row.generic_name).filter(Boolean)),
+      ];
+
+      if (brands.length > 0) {
+        return {
+          type: "text",
+          text: `For ${genericNames[0] || term}:\n\nAvailable brands in the Philippines: ${brands.join(", ")}.\n\nAlways check with your pharmacist for current availability.`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+// Check if user just typed a drug name with typos - AUTO-LOOKUP
+async function quickDrugCheck(
+  userMessage: string,
+  uid: string,
+): Promise<AIResponse | null> {
+  // Only trigger for short messages (likely just a drug name)
+  if (userMessage.length < 3 || userMessage.length > 40) return null;
+
+  // Skip if it has spaces (could be a sentence)
+  if (userMessage.includes(" ") && userMessage.split(" ").length > 2)
+    return null;
+
+  await ensureDrugNamesCache();
+  const corrected = fuzzyCorrectDrugName(userMessage);
+
+  if (corrected !== userMessage) {
+    console.log(`🔍 [Typo] "${userMessage}" → "${corrected}"`);
+
+    // Get patient's current medications for interaction checking
+    const profile = await getUserProfile(uid);
+    const meds = profile?.medications ?? [];
+    const patientDrugIds = [
+      ...new Set(
+        meds.flatMap((m) =>
+          m.is_combination && m.drug_ids?.length
+            ? m.drug_ids
+            : m.drug_id
+              ? [m.drug_id]
+              : [],
+        ),
+      ),
+    ];
+
+    // ACTUALLY LOOK UP THE DRUG
+    const drugInfo = await lookupDrugByName(corrected, patientDrugIds);
+
+    if (drugInfo) {
+      // Return the actual drug information, not just a "did you mean"
+      return {
+        type: "text",
+        text: `You asked about "${userMessage}" (did you mean **${corrected}**?)\n\n${drugInfo}`,
+      };
+    }
+  }
+
+  return null;
+}
 
 export function invalidateCache(): void {
   cachedUid = null;
@@ -822,7 +1082,7 @@ export async function sendChatMessage(
 ): Promise<AIResponse> {
   try {
     // ── Step 0: Fast local guard (no API calls) ─────────────────────────────
-    const inputClass = classifyInput(userMessage);
+    const inputClass = await classifyInputAI(userMessage);
 
     if (inputClass === "gibberish") {
       return {
@@ -830,20 +1090,61 @@ export async function sendChatMessage(
         text: "I'm not sure I understood that. Could you rephrase your question? I'm here to help with your medications and health. 😊",
       };
     }
-
     if (inputClass === "off-topic") {
       return {
         type: "text",
-        text: "I'm MEADGUARD, your medication assistant. I can only help with questions about your medications, health conditions, symptoms, or drug information. Is there anything health-related I can help you with?",
+        text: "I'm mainly here for medication and health questions—but feel free to ask anything related to medicines, like brands, uses, or side effects. 😊",
       };
     }
+
+    // ── Step 0.5: Quick brand lookup (no GPT needed) ────────────────────────
+    const brandResponse = await quickBrandLookup(userMessage);
+    if (brandResponse) return brandResponse;
+
+    // ── Step 0.6: Quick drug typo check ─────────────────────────────────────
+    const typoResponse = await quickDrugCheck(userMessage, uid);
+    if (typoResponse) return typoResponse;
 
     // ── Step 1: Build fresh prompt + NLP extraction in parallel ────────────
     const [freshPrompt, extractedDrugs] = await Promise.all([
       buildSystemPrompt(uid).catch(() => FALLBACK_PROMPT),
       extractDrugNamesFromMessage(userMessage),
     ]);
+    // ── BRAND QUERY SHORTCUT ───────────────────────────────────────────────
+    if (
+      extractedDrugs.length &&
+      /(brand|brands|available|what brand|anong brand)/i.test(userMessage)
+    ) {
+      const drug = extractedDrugs[0];
 
+      // Apply fuzzy correction to the extracted drug
+      const correctedDrug = fuzzyCorrectDrugName(drug);
+
+      const { data, error } = await supabase
+        .from("ph_medicine_mapping")
+        .select("ph_brand,generic_name")
+        .ilike("generic_name", `%${correctedDrug}%`)
+        .limit(20);
+
+      if (!error && data?.length) {
+        const brands = [
+          ...new Set(data.map((row) => row.ph_brand).filter(Boolean)),
+        ];
+
+        if (brands.length > 0) {
+          return {
+            type: "text",
+            text: `${correctedDrug} brands include: ${brands.join(", ")}.`,
+          };
+        }
+      }
+
+      // If no results, offer help
+      return {
+        type: "text",
+        text: `I couldn't find "${drug}" in my database. Did you mean something else? Try typing the generic name or check your spelling.`,
+      };
+    }
     // ── Step 2: Get patient drug IDs for interaction checking ───────────────
     const profile = await getUserProfile(uid);
     const meds = profile?.medications ?? [];
@@ -1110,6 +1411,7 @@ export async function generateReactionsAnalysis(
 
   // ✅ ADD THE MISSING OPENAI CALL HERE
   const systemPrompt = `You are a clinical medication analysis AI. Analyze the patient's medications and provide a comprehensive report.
+
 
 PATIENT PROFILE:
 Name: ${name}

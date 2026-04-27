@@ -2,15 +2,19 @@
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
+
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async () => {
+    const isForeground = AppState.currentState === "active";
+    return {
+      shouldShowBanner: !isForeground, // ← was always true
+      shouldShowList: true,
+      shouldPlaySound: !isForeground, // ← no duplicate sound either
+      shouldSetBadge: true,
+    };
+  },
 });
 
 // Request permissions and get Expo push token
