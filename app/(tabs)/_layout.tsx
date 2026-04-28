@@ -68,19 +68,11 @@ export default function TabLayout() {
             ),
           }}
         />
-
-        <Tabs.Screen
-          name="medication-logs"
-          options={{
-            href: null,
-          }}
-        />
-        <Tabs.Screen
-          name="notifications"
-          options={{
-            href: null,
-          }}
-        />
+        <Tabs.Screen name="medication-logs" options={{ href: null }} />
+        <Tabs.Screen name="notifications" options={{ href: null }} />
+        <Tabs.Screen name="MedicationsTab" options={{ href: null }} />
+        <Tabs.Screen name="ReactionsTab" options={{ href: null }} />
+        <Tabs.Screen name="RemindersTab" options={{ href: null }} />
       </Tabs>
     </SelectedPatientProvider>
   );

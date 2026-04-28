@@ -8,7 +8,7 @@ interface Medication {
   id: string;
   name: string;
   drug_ids?: string[];
-  drug_id?: string; 
+  drug_id?: string;
   dosageAmount?: number; // ✅ Add this
   dosageUnit?: string;
   generic_name?: string;
@@ -293,3 +293,4 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
   },
 });
+export default MedicationsTab;

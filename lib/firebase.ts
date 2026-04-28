@@ -1,10 +1,7 @@
-// lib/firebase.ts - CORRECTED IMPORTS
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { initializeApp } from "firebase/app";
-import { getReactNativePersistence, initializeAuth } from "firebase/auth";
+import { getApps, initializeApp } from "firebase/app";
+import { initializeAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Your Firebase config
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -14,28 +11,8 @@ const firebaseConfig = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-console.log("🔥 Initializing Firebase with project:", firebaseConfig.projectId);
-
-// Initialize Firebase
-let app;
-let auth;
-let db;
-
-try {
-  app = initializeApp(firebaseConfig);
-  console.log("✅ Firebase app initialized");
-
-  auth = initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage),
-  });
-  console.log("✅ Firebase auth initialized");
-
-  db = getFirestore(app);
-  console.log("✅ Firestore initialized");
-} catch (error) {
-  console.error("❌ Firebase initialization error:", error);
-  throw error;
-}
-
-export { auth, db };
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+console.log("FIREBASE CONFIG:", firebaseConfig);
+export const auth = initializeAuth(app);
+export const db = getFirestore(app);
 export default app;

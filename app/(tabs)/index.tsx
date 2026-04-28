@@ -1,7 +1,6 @@
 // app/(tabs)/index.tsx
 import { NotificationBell } from "@/components/NotificationBell";
 import { Ionicons } from "@expo/vector-icons";
-import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import {
   addDoc,
@@ -1057,8 +1056,7 @@ export default function HomeScreen() {
             reminderId: l.reminderId,
             medicationId: l.medicationId,
             name: l.name,
-            dosage:
-  `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
+            dosage: `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
             time: scheduledTime, // ← scheduled time (for column + sorting)
             actualTakenTime, // ← real taken time (for badge)
             taken: true,
@@ -1088,7 +1086,7 @@ export default function HomeScreen() {
           reminderId: m.reminderId,
           medicationId: m.medicationId,
           name: m.name,
-          dosage:`${m.dosageAmount ?? ""}${m.dosageUnit ?? ""}`,
+          dosage: `${m.dosageAmount ?? ""}${m.dosageUnit ?? ""}`,
           time: m.scheduledTime,
           taken: false,
           missed: true,
@@ -1108,7 +1106,7 @@ export default function HomeScreen() {
           reminderId: l.id,
           medicationId: l.medicationId,
           name: l.name,
-          dosage:`${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
+          dosage: `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
           time: l.takenAt?.toDate
             ? l.takenAt.toDate().toTimeString().slice(0, 5)
             : "00:00",
@@ -1200,8 +1198,8 @@ export default function HomeScreen() {
           reminderId: r.id,
           medicationId: r.medicationId,
           name: r.medicationName,
-          dosageAmount: med?.dosageAmount,        // ← add this
-  dosageUnit: med?.dosageUnit || "mg", 
+          dosageAmount: med?.dosageAmount, // ← add this
+          dosageUnit: med?.dosageUnit || "mg",
           time,
           actualTakenTime: takenLog?.takenAt?.toDate
             ? takenLog.takenAt.toDate().toTimeString().slice(0, 5)
@@ -1292,9 +1290,10 @@ export default function HomeScreen() {
         reminderId: item.reminderId,
         medicationId: item.medicationId,
         name: item.name,
-        dosage:(item.dosageAmount != null
-      ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
-      : null),
+        dosage:
+          item.dosageAmount != null
+            ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
+            : null,
         scheduledTime: item.time,
         dateKey: dk,
         status: "taken",
@@ -1311,9 +1310,9 @@ export default function HomeScreen() {
         reminderId: timeSpecificReminderId,
         name: item.name,
         dosage:
-    (item.dosageAmount != null
-      ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
-      : null),
+          item.dosageAmount != null
+            ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
+            : null,
         takenAt: serverTimestamp(),
         dateKey: dk,
       });
@@ -1840,7 +1839,7 @@ export default function HomeScreen() {
                         item.missed && styles.medDosageMissed,
                       ]}
                     >
-                      {`${item.dosageAmount ?? ""} ${item.dosageUnit ?? "mg"}`}                    
+                      {`${item.dosageAmount ?? ""} ${item.dosageUnit ?? "mg"}`}
                     </Text>
                     {item.hasInteraction && (
                       <View style={styles.tagRow}>
@@ -2148,9 +2147,9 @@ export default function HomeScreen() {
                               ? getDosageDisplay(medication)
                               : log.dosageAmount
                                 ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
-                                : ((log.dosageAmount != null
-                                    ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
-                                    : "—"));
+                                : log.dosageAmount != null
+                                  ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
+                                  : "—";
                           })()}
                         </Text>
                       </View>
@@ -2207,7 +2206,7 @@ export default function HomeScreen() {
               </View>
             </>
           )}
-          <TouchableOpacity
+          {/* <TouchableOpacity
             style={styles.testAlarmButton}
             onPress={async () => {
               // Test alarm that uses your custom sound and vibration
@@ -2234,7 +2233,7 @@ export default function HomeScreen() {
           >
             <Ionicons name="alarm" size={16} color={Colors.primary} />
             <Text style={styles.testAlarmText}>Test Alarm</Text>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
           {/* Log a Dose chips */}
           {canTakeOnSelectedDate &&
             medications.filter((m) => m.active).length > 0 && (
