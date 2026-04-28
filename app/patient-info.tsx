@@ -149,8 +149,7 @@ function PatientInfoContent() {
           dietaryPreferences: data.medicalData.dietaryPreferences || "",
           lifestyleNotes: data.medicalData.lifestyleNotes || "",
           notes: data.medicalData.notes || "",
-          updatedAt: data.medicalData.updatedAt || null,
-        });
+          updatedAt: (data.medicalData as any).updatedAt || null,});
         return;
       }
 

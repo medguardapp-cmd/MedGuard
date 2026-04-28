@@ -95,9 +95,12 @@ interface Reminder {
   times: string[];
   days: string[];
   enabled: boolean;
+
   durationType?: "none" | "date-range" | "until-empty";
   startDate?: string | null;
   endDate?: string | null;
+
+  scheduledDate?: any; // ADD THIS
   createdAt?: any;
 }
 
@@ -105,7 +108,8 @@ interface ScheduleItem {
   reminderId: string;
   medicationId: string;
   name: string;
-  dosage: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
   time: string;
   actualTakenTime?: string | null;
   taken: boolean;
@@ -131,7 +135,8 @@ interface TakenLog {
   medicationId: string;
   reminderId: string;
   name: string;
-  dosage: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
   takenAt: any;
   dateKey: string;
 }
@@ -141,7 +146,8 @@ interface MissedLog {
   medicationId: string;
   reminderId: string;
   name: string;
-  dosage: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
   scheduledTime: string;
   dateKey: string;
   missedAt: any;
@@ -1051,7 +1057,8 @@ export default function HomeScreen() {
             reminderId: l.reminderId,
             medicationId: l.medicationId,
             name: l.name,
-            dosage: l.dosage,
+            dosage:
+  `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
             time: scheduledTime, // ← scheduled time (for column + sorting)
             actualTakenTime, // ← real taken time (for badge)
             taken: true,
@@ -1081,7 +1088,7 @@ export default function HomeScreen() {
           reminderId: m.reminderId,
           medicationId: m.medicationId,
           name: m.name,
-          dosage: m.dosage,
+          dosage:`${m.dosageAmount ?? ""}${m.dosageUnit ?? ""}`,
           time: m.scheduledTime,
           taken: false,
           missed: true,
@@ -1101,7 +1108,7 @@ export default function HomeScreen() {
           reminderId: l.id,
           medicationId: l.medicationId,
           name: l.name,
-          dosage: l.dosage,
+          dosage:`${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
           time: l.takenAt?.toDate
             ? l.takenAt.toDate().toTimeString().slice(0, 5)
             : "00:00",
@@ -1193,7 +1200,8 @@ export default function HomeScreen() {
           reminderId: r.id,
           medicationId: r.medicationId,
           name: r.medicationName,
-          dosage: r.medicationDosage,
+          dosageAmount: med?.dosageAmount,        // ← add this
+  dosageUnit: med?.dosageUnit || "mg", 
           time,
           actualTakenTime: takenLog?.takenAt?.toDate
             ? takenLog.takenAt.toDate().toTimeString().slice(0, 5)
@@ -1284,7 +1292,9 @@ export default function HomeScreen() {
         reminderId: item.reminderId,
         medicationId: item.medicationId,
         name: item.name,
-        dosage: item.dosage,
+        dosage:(item.dosageAmount != null
+      ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
+      : null),
         scheduledTime: item.time,
         dateKey: dk,
         status: "taken",
@@ -1300,7 +1310,10 @@ export default function HomeScreen() {
         medicationId: item.medicationId,
         reminderId: timeSpecificReminderId,
         name: item.name,
-        dosage: item.dosage,
+        dosage:
+    (item.dosageAmount != null
+      ? `${item.dosageAmount} ${item.dosageUnit || "mg"}`
+      : null),
         takenAt: serverTimestamp(),
         dateKey: dk,
       });
@@ -1332,7 +1345,6 @@ export default function HomeScreen() {
     setQuickTakeForm({
       medicationId: med?.id ?? "",
       name: med?.name ?? "",
-      dosage: med?.dosage ?? "",
       dosageAmount: med?.dosageAmount ?? 0, // ✅ Add
       dosageUnit: med?.dosageUnit ?? "mg",
       time: `${hh}:${mm}`,
@@ -1828,7 +1840,7 @@ export default function HomeScreen() {
                         item.missed && styles.medDosageMissed,
                       ]}
                     >
-                      {item.dosage}
+                      {`${item.dosageAmount ?? ""} ${item.dosageUnit ?? "mg"}`}                    
                     </Text>
                     {item.hasInteraction && (
                       <View style={styles.tagRow}>
@@ -2136,7 +2148,9 @@ export default function HomeScreen() {
                               ? getDosageDisplay(medication)
                               : log.dosageAmount
                                 ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
-                                : log.dosage || "—";
+                                : ((log.dosageAmount != null
+                                    ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
+                                    : "—"));
                           })()}
                         </Text>
                       </View>

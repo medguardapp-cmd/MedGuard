@@ -63,9 +63,7 @@ export async function scheduleMedicationAlarm(
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           hour: hours,
-          minute: minutes,
-          repeats: true,
-        },
+          minute: minutes,        },
       });
 
       scheduled++;
@@ -94,7 +92,6 @@ export async function scheduleMedicationAlarm(
             hour: hours,
             minute: minutes,
             weekday: expoWeekday,
-            repeats: true,
           },
         });
 
@@ -127,11 +124,7 @@ export async function scheduleSnoozeAlarm(
       title: "🔔 Snooze Reminder",
       body: `Don't forget to take ${medicationName} ${dosage}`,
       sound: "alarm.mp3",
-      priority: Notifications.AndroidNotificationPriority.MAX,
       categoryIdentifier: "medication_action",
-      android: {
-        channelId: "medication-alarms-v2", // ✅ Same new channel
-      },
       data: {
         reminderId,
         medicationName,
@@ -231,13 +224,13 @@ export function handleNotificationResponse(
 
   switch (actionIdentifier) {
     case "TAKE":
-      onTake(reminderId);
+      onTake(reminderId as string);
       break;
     case "SNOOZE":
-      onSnooze(reminderId);
+      onSnooze(reminderId as string);
       break;
     case "SKIP":
-      onSkip(reminderId);
+      onSkip(reminderId as string);
       break;
     default:
       console.log("Notification tapped (no action):", reminderId);

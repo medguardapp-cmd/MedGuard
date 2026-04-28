@@ -1,5 +1,6 @@
 // app/(onboarding)/stepper.tsx - WITH CONDITIONAL STEPS FOR CAREGIVERS
 
+import Colors from "@/constants/colors";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -2214,5 +2215,40 @@ const styles = StyleSheet.create({
   },
   optionChipTextActive: {
     color: "white",
+  },
+  customGenderInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    color: Colors.text,
+    marginTop: 8,
+  },
+  toggleContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  toggleOption: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  toggleActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  toggleText: {
+    fontSize: 14,
+    color: Colors.text,
+    fontWeight: "500",
+  },
+  toggleTextActive: {
+    color: Colors.surface,
   },
 });

@@ -7,6 +7,8 @@ import Colors from "../../constants/colors";
 interface Medication {
   id: string;
   name: string;
+  drug_ids?: string[];
+  drug_id?: string; 
   dosageAmount?: number; // ✅ Add this
   dosageUnit?: string;
   generic_name?: string;
@@ -16,7 +18,6 @@ interface Medication {
   ingredients?: string[];
   refillReminder?: boolean;
   refillThreshold?: number;
-  drug_id?: string;
 }
 
 interface Reminder {
@@ -39,18 +40,13 @@ interface MedicationsTabProps {
 }
 // 2. Add a helper function before the component:
 const getDosageDisplay = (medication: Medication): string => {
-  // If there's a combined dosage string, use it
-  if (medication.dosage) return medication.dosage;
-
-  // If we have separate fields, combine them
   if (medication.dosageAmount !== undefined) {
     const unit = medication.dosageUnit || "mg";
     return `${medication.dosageAmount} ${unit}`;
   }
-
-  // Fallback
   return "No dosage set";
 };
+
 export const MedicationsTab: React.FC<MedicationsTabProps> = ({
   medications,
   searchQuery,

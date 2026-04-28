@@ -316,7 +316,7 @@ export const checkCaregiverPatientMissedDoses = async (
       const takenLogs = takenSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const reminders = remindersSnap.docs.map((d) => ({
         id: d.id,
-        ...d.data(),
+        ...d.data() as any,
       }));
 
       for (const reminder of reminders) {
@@ -331,7 +331,7 @@ export const checkCaregiverPatientMissedDoses = async (
           const diffMinutes = Math.floor(
             (today.getTime() - scheduled.getTime()) / 60_000,
           );
-          const isTaken = takenLogs.some(
+          const isTaken = (takenLogs as any[]).some(
             (log) =>
               log.reminderId === reminder.id ||
               log.reminderId === `${reminder.id}_${time}`,

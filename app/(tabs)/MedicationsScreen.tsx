@@ -15,7 +15,7 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -49,11 +49,12 @@ import { MedicationsTab } from "./MedicationsTab";
 import { ReactionsTab } from "./ReactionsTab";
 import { RemindersTab } from "./RemindersTab";
 
+
 // Types
 interface Medication {
   id: string;
   drug_id: string;
-  drug_ids: string[];
+  drug_ids?: string[];
   name: string;
   generic_name: string;
   dosageAmount: number;
@@ -473,7 +474,32 @@ export default function MedicationsScreen() {
       unsubscribeTaken();
     };
   }, [user?.uid, userType, selectedPatientId]);
+  const loadReactions = useCallback(async () => {
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
+    setLoadingReactions(true);
+    setReactionsError(null);
+    try {
+      const todaysMeds = getTodaysMedications();
+
+      if (todaysMeds.length === 0) {
+        setAiAnalysis(null);
+        setLoadingReactions(false);
+        setReactionsLoaded(true);
+        return;
+      }
+
+      const analysis = await generateReactionsAnalysis(userType, todaysMeds);
+      setAiAnalysis(analysis);
+    } catch (error: any) {
+      setReactionsError(error.message || "Failed to load reactions");
+    } finally {
+      setLoadingReactions(false);
+      setReactionsLoaded(true);
+    }
+  }, [userType, selectedPatientId, user?.uid, getTodaysMedications]);
   useEffect(() => {
     if (activeTab === "reactions" && !reactionsLoaded && !loadingReactions) {
       loadReactions();
@@ -484,16 +510,17 @@ export default function MedicationsScreen() {
   useEffect(() => {
     const userId = auth.currentUser?.uid;
     if (!userId || reminders.length === 0) return;
-
-    const batch: Promise<void>[] = reminders
-      .filter((r) => !r.createdAt) // only reminders missing createdAt
-      .map((r) =>
-        updateDoc(doc(db, "users", userId, "reminders", r.id), {
-          createdAt: serverTimestamp(),
-        }).catch(console.warn),
-      );
-
-    if (batch.length > 0) Promise.all(batch).catch(console.warn);
+  
+    const needsMigration = reminders.filter((r) => !r.createdAt);
+    if (needsMigration.length === 0) return; // ← stop if nothing to migrate
+  
+    const batch: Promise<void>[] = needsMigration.map((r) =>
+      updateDoc(doc(db, "users", userId, "reminders", r.id), {
+        createdAt: serverTimestamp(),
+      }).catch(console.warn),
+    );
+  
+    Promise.all(batch).catch(console.warn);
   }, [reminders]);
   // Auto-select first patient for caregivers
   // useEffect(() => {
@@ -537,60 +564,31 @@ export default function MedicationsScreen() {
     setReactionsLoaded(false);
   }, [medications]);
 
-  // Add this useEffect after your other useEffects
+  const disabledRemindersRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     const checkExpiredReminders = async () => {
       const targetUserId =
         userType === "caregiver" ? selectedPatientId : user?.uid;
       if (!targetUserId) return;
-
+  
       for (const reminder of reminders) {
         if (!reminder.enabled) continue;
-
+        if (disabledRemindersRef.current.has(reminder.id)) continue; // ← skip already processed
+  
         if (!isReminderActive(reminder)) {
-          console.log(
-            `Auto-disabling expired reminder: ${reminder.medicationName}`,
-          );
+          disabledRemindersRef.current.add(reminder.id); // ← mark before writing
           await updateDoc(
             doc(db, "users", targetUserId, "reminders", reminder.id),
-            {
-              enabled: false,
-            },
+            { enabled: false },
           );
           await cancelMedicationAlarm(`${targetUserId}_${reminder.id}`);
         }
       }
     };
-
+  
     checkExpiredReminders();
   }, [reminders, medications, takenLogs]);
-
-  const loadReactions = useCallback(async () => {
-    const targetUserId =
-      userType === "caregiver" ? selectedPatientId : user?.uid;
-    if (!targetUserId) return;
-
-    setLoadingReactions(true);
-    setReactionsError(null);
-    try {
-      const todaysMeds = getTodaysMedications();
-
-      if (todaysMeds.length === 0) {
-        setAiAnalysis(null);
-        setLoadingReactions(false);
-        setReactionsLoaded(true);
-        return;
-      }
-
-      const analysis = await generateReactionsAnalysis(userType, todaysMeds);
-      setAiAnalysis(analysis);
-    } catch (error: any) {
-      setReactionsError(error.message || "Failed to load reactions");
-    } finally {
-      setLoadingReactions(false);
-      setReactionsLoaded(true);
-    }
-  }, [userType, selectedPatientId, user?.uid, getTodaysMedications]);
 
   // Helper functions
   const formatTime = (time: string) => {
@@ -1213,9 +1211,9 @@ export default function MedicationsScreen() {
             reminders={reminders}
             onAddReminder={() => setReminderModalVisible(true)}
             onEditMedication={(med) => {
-              setEditingMedication(med);
-              setMedicationForm(med);
-              setMedicationModalVisible(true);
+              setEditingMedication(med as Medication);
+  setMedicationForm(med as Medication);
+  setMedicationModalVisible(true);
             }}
             onDeleteMedication={handleDeleteMedication}
             isCaregiver={isCaregiver}
@@ -1584,7 +1582,7 @@ export default function MedicationsScreen() {
                 showsVerticalScrollIndicator={false}
                 nestedScrollEnabled
               >
-                <View style={styles.selectedMedicationInfo}>
+                <View style={styles.selectedMedicineInfo}>
                   <Text style={styles.selectedMedicationName}>
                     {selectedMedicationForReminder.name}{" "}
                     {getDosageDisplay(selectedMedicationForReminder)}
