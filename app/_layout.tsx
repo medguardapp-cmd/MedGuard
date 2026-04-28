@@ -7,9 +7,11 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   addDoc,
   collection,
+  doc,
   getDocs,
   query,
   serverTimestamp,
+  setDoc,
   where,
 } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
@@ -25,12 +27,31 @@ import { registerForPushNotificationsAsync } from "../lib/notifications";
 
 import {
   cancelMedicationAlarm,
+  getReminderLogIdWithTime,
   handleNotificationResponse,
   scheduleSnoozeAlarm,
   setupNotificationCategories,
 } from "../services/reminderAlarmService";
 
 SplashScreen.preventAutoHideAsync();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true, // ✅ Add this
+    shouldShowList: true, // ✅ Add this
+  }),
+});
+
+interface ReminderDoc {
+  id: string;
+  medicationId: string;
+  medicationName: string;
+  medicationDosage: string;
+  [key: string]: any;
+}
 
 function RootLayoutNav() {
   const router = useRouter();
@@ -42,9 +63,6 @@ function RootLayoutNav() {
   const notificationListenerSetup = useRef(false);
   const authUnsubscribeRef = useRef<any>(null);
 
-  // ─────────────────────────────────────────
-  // NOTIFICATION SETUP (RUN ONCE ONLY)
-  // ─────────────────────────────────────────
   useEffect(() => {
     if (notificationListenerSetup.current) return;
     notificationListenerSetup.current = true;
@@ -58,35 +76,92 @@ function RootLayoutNav() {
 
     const subscription = Notifications.addNotificationResponseReceivedListener(
       async (response) => {
-        const data = response.notification.request.content.data ?? {};
-
-        const { medicationName, dosage } = data;
+        const notificationData =
+          response.notification.request.content.data ?? {};
+        const { reminderId, medicationName, dosage } = notificationData;
 
         await handleNotificationResponse(
           response,
 
           // MARK AS TAKEN
-          async (id) => {
+          async (callbackReminderId: string) => {
             const userId = auth.currentUser?.uid;
-            if (!userId || !id) return;
+            if (!userId || !callbackReminderId) return;
 
-            const dk = new Date().toDateString();
-            const baseReminderId = id.split("_").slice(0, 2).join("_");
+            const currentDateKey = new Date().toDateString();
 
-            await addDoc(collection(db, "users", userId, "taken_logs"), {
-              medicationId: id,
-              reminderId: baseReminderId,
-              name: medicationName || "Medication",
-              dosage: dosage || "",
-              takenAt: serverTimestamp(),
-              dateKey: dk,
-            });
+            try {
+              const remindersSnap = await getDocs(
+                collection(db, "users", userId, "reminders"),
+              );
+
+              const reminder = remindersSnap.docs
+                .map((d) => ({ id: d.id, ...d.data() }) as ReminderDoc)
+                .find(
+                  (r) =>
+                    r.id === callbackReminderId ||
+                    r.id === callbackReminderId.split("_")[0],
+                );
+
+              if (!reminder) {
+                console.warn("Reminder not found for id:", callbackReminderId);
+                return;
+              }
+
+              const scheduledTime = notificationData.time || "08:00";
+              const reminderName =
+                medicationName || reminder.medicationName || "Medication";
+              const reminderDosage = dosage || reminder.medicationDosage || "";
+              const reminderMedicationId = reminder.medicationId;
+
+              // Save to taken_logs
+              await addDoc(collection(db, "users", userId, "taken_logs"), {
+                medicationId: reminderMedicationId,
+                reminderId: callbackReminderId,
+                name: reminderName,
+                dosage: reminderDosage,
+                takenAt: serverTimestamp(),
+                dateKey: currentDateKey,
+              });
+
+              // Save to reminder_status_logs
+              const statusLogId = getReminderLogIdWithTime(
+                callbackReminderId,
+                scheduledTime,
+                currentDateKey,
+              );
+
+              await setDoc(
+                doc(db, "users", userId, "reminder_status_logs", statusLogId),
+                {
+                  reminderId: callbackReminderId,
+                  medicationId: reminderMedicationId,
+                  name: reminderName,
+                  dosage: reminderDosage,
+                  scheduledTime: scheduledTime,
+                  dateKey: currentDateKey,
+                  status: "taken",
+                  takenAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                },
+              );
+
+              // Cancel the alarm
+              await cancelMedicationAlarm(callbackReminderId);
+
+              console.log(
+                "✅ Medication marked as taken from notification:",
+                reminderName,
+              );
+            } catch (error) {
+              console.error("Error marking as taken:", error);
+            }
           },
 
           // SNOOZE
-          async (id) => {
+          async (snoozeReminderId: string) => {
             await scheduleSnoozeAlarm(
-              id,
+              snoozeReminderId,
               medicationName || "Medication",
               dosage || "",
               10,
@@ -94,8 +169,8 @@ function RootLayoutNav() {
           },
 
           // SKIP
-          async (id) => {
-            await cancelMedicationAlarm(id);
+          async (skipReminderId: string) => {
+            await cancelMedicationAlarm(skipReminderId);
           },
         );
       },
@@ -106,9 +181,6 @@ function RootLayoutNav() {
     };
   }, []);
 
-  // ─────────────────────────────────────────
-  // AUTH + ROUTING LOGIC
-  // ─────────────────────────────────────────
   useEffect(() => {
     authUnsubscribeRef.current = onAuthStateChanged(auth, async (user) => {
       await new Promise((r) => setTimeout(r, 300));
@@ -181,18 +253,9 @@ function RootLayoutNav() {
     return () => authUnsubscribeRef.current?.();
   }, [isCompleted, onboardingLoading, data?.userData?.userType, segments]);
 
-  // ─────────────────────────────────────────
-  // LOADING SCREEN
-  // ─────────────────────────────────────────
   if (!isReady || onboardingLoading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <ActivityIndicator size="large" color="#3b82f6" />
       </View>
     );
@@ -201,9 +264,6 @@ function RootLayoutNav() {
   return <Slot />;
 }
 
-// ─────────────────────────────────────────
-// ROOT WRAPPER
-// ─────────────────────────────────────────
 export default function RootLayout() {
   return (
     <OnboardingProvider>

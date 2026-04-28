@@ -56,7 +56,8 @@ interface Medication {
   drug_ids: string[];
   name: string;
   generic_name: string;
-  dosage: string;
+  dosageAmount: number;
+  dosageUnit: string; // mg default
   quantity: number;
   refillReminder: boolean;
   refillThreshold?: number;
@@ -109,7 +110,20 @@ interface TakenLog {
   takenAt: any;
   dateKey: string;
 }
+const getDosageDisplay = (medication: {
+  dosage?: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
+}): string => {
+  if (medication.dosage) return medication.dosage;
 
+  if (medication.dosageAmount !== undefined) {
+    const unit = medication.dosageUnit || "mg";
+    return `${medication.dosageAmount} ${unit}`;
+  }
+
+  return "No dosage set";
+};
 const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const severityLabels = [
   "",
@@ -199,7 +213,8 @@ export default function MedicationsScreen() {
   // Form states
   const [medicationForm, setMedicationForm] = useState<Partial<Medication>>({
     name: "",
-    dosage: "",
+    dosageAmount: 0,
+    dosageUnit: "mg",
     quantity: 0,
     refillReminder: false,
     active: true,
@@ -264,9 +279,6 @@ export default function MedicationsScreen() {
     ];
     const todayDateKey = normalizedToday.toDateString();
 
-    console.log("=== getTodaysMedications Debug ===");
-    console.log("Today:", normalizedToday.toDateString());
-
     // Get medication IDs from reminders that are active for today
     const scheduledTodayIds = reminders
       .filter((r) => {
@@ -311,13 +323,6 @@ export default function MedicationsScreen() {
           const scheduledDay = normalizeDate(reminderDateTime);
           const isToday = scheduledDay.getTime() === normalizedToday.getTime();
 
-          console.log(`One-time reminder ${r.medicationName}:`, {
-            createdDate: createdDate.toDateString(),
-            firstTime: firstTime,
-            scheduledDay: scheduledDay.toDateString(),
-            isToday: isToday,
-          });
-
           return isToday;
         }
 
@@ -342,17 +347,9 @@ export default function MedicationsScreen() {
       ...new Set([...scheduledTodayIds, ...takenTodayIds]),
     ];
 
-    console.log("Scheduled today IDs:", scheduledTodayIds);
-    console.log("Taken today IDs:", takenTodayIds);
-    console.log("All IDs for today:", allTodaysMedIds);
-
     // Filter active medications
     const result = medications.filter(
       (m) => m.active && allTodaysMedIds.includes(m.id),
-    );
-    console.log(
-      "Final medications:",
-      result.map((m) => m.name),
     );
 
     return result;
@@ -540,44 +537,6 @@ export default function MedicationsScreen() {
     setReactionsLoaded(false);
   }, [medications]);
 
-  // Add this after your other useEffects
-  useEffect(() => {
-    const scheduleExistingReminders = async () => {
-      const userId = user?.uid;
-      if (!userId || reminders.length === 0) return;
-
-      for (const reminder of reminders) {
-        if (!reminder.enabled) continue;
-
-        const isOneTime = !reminder.days || reminder.days.length === 0;
-
-        for (const time of reminder.times || ["08:00"]) {
-          const [hours, minutes] = time.split(":").map(Number);
-
-          if (isOneTime && reminder.scheduledDate) {
-            await scheduleMedicationAlarm(
-              `${userId}_${reminder.id}`,
-              reminder.medicationName,
-              reminder.medicationDosage,
-              reminder.times || ["08:00"], // ✅ times array
-              [], // ✅ empty days
-            );
-          } else if (reminder.days && reminder.days.length > 0) {
-            await scheduleMedicationAlarm(
-              `${userId}_${reminder.id}`,
-              reminder.medicationName,
-              reminder.medicationDosage,
-              reminder.times || ["08:00"], // ✅ times array
-              reminder.days, // ✅ day names
-            );
-          }
-        }
-      }
-    };
-
-    scheduleExistingReminders();
-  }, [reminders, user?.uid]);
-
   // Add this useEffect after your other useEffects
   useEffect(() => {
     const checkExpiredReminders = async () => {
@@ -721,7 +680,7 @@ export default function MedicationsScreen() {
 
   // Medication CRUD
   const handleSaveMedication = async () => {
-    if (!medicationForm.name || !medicationForm.dosage) {
+    if (!medicationForm.name || !medicationForm.dosageAmount) {
       Alert.alert("Error", "Please fill in all required fields");
       return;
     }
@@ -784,11 +743,14 @@ export default function MedicationsScreen() {
               text: "Add Reminder",
               onPress: () => {
                 const newMed = { ...data, id: docRef.id } as Medication;
+                const dosageText = getDosageDisplay(newMed);
+
                 setSelectedMedicationForReminder(newMed);
+
                 setReminderForm({
                   medicationId: docRef.id,
                   medicationName: newMed.name,
-                  medicationDosage: newMed.dosage,
+                  medicationDosage: dosageText,
                   times: ["08:00"],
                   days: [],
                   enabled: true,
@@ -796,6 +758,7 @@ export default function MedicationsScreen() {
                   vibrate: true,
                   durationType: "none",
                 });
+
                 setReminderModalVisible(true);
               },
             },
@@ -845,7 +808,8 @@ export default function MedicationsScreen() {
   const resetMedicationForm = () => {
     setMedicationForm({
       name: "",
-      dosage: "",
+      dosageAmount: 0,
+      dosageUnit: "mg",
       quantity: 0,
       refillReminder: false,
       active: true,
@@ -897,7 +861,7 @@ export default function MedicationsScreen() {
     const reminderData = {
       medicationId: selectedMedicationForReminder.id,
       medicationName: selectedMedicationForReminder.name,
-      medicationDosage: selectedMedicationForReminder.dosage,
+      medicationDosage: getDosageDisplay(selectedMedicationForReminder),
       times,
       days: normalizedDays,
       enabled: reminderForm.enabled !== false,
@@ -943,9 +907,6 @@ export default function MedicationsScreen() {
       }
       // ✅ Schedule the alarm if enabled
       if (reminderData.enabled && times.length > 0) {
-        const targetUserId =
-          userType === "caregiver" ? selectedPatientId : user?.uid;
-
         if (isOneTime && scheduledDate) {
           // One-time reminder - use times array and empty days
           await scheduleMedicationAlarm(
@@ -976,6 +937,45 @@ export default function MedicationsScreen() {
     }
   };
 
+  const handleToggleReminder = async (id: string, enabled: boolean) => {
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
+
+    const reminder = reminders.find((r) => r.id === id);
+
+    if (!enabled) {
+      // ✅ Correct identifier format
+      await cancelMedicationAlarm(`${targetUserId}_${id}`);
+    } else {
+      // ✅ Call once, not inside a loop
+      if (reminder && reminder.times && reminder.times.length > 0) {
+        const isOneTime = !reminder.days || reminder.days.length === 0;
+
+        if (isOneTime) {
+          await scheduleMedicationAlarm(
+            `${targetUserId}_${id}`,
+            reminder.medicationName,
+            reminder.medicationDosage,
+            reminder.times,
+            [],
+          );
+        } else if (reminder.days && reminder.days.length > 0) {
+          await scheduleMedicationAlarm(
+            `${targetUserId}_${id}`,
+            reminder.medicationName,
+            reminder.medicationDosage,
+            reminder.times,
+            reminder.days,
+          );
+        }
+      }
+    }
+
+    await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
+      enabled,
+    });
+  };
   const handleDeleteReminder = async (id: string) => {
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : user?.uid;
@@ -987,67 +987,13 @@ export default function MedicationsScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          // Cancel all alarms for this reminder
-          const reminder = reminders.find((r) => r.id === id);
-          if (reminder) {
-            for (const time of reminder.times || ["08:00"]) {
-              await cancelMedicationAlarm(`${targetUserId}_${id}_${time}`);
-            }
-          }
+          // ✅ Correct identifier format — matches what was used when scheduling
+          await cancelMedicationAlarm(`${targetUserId}_${id}`);
           await deleteDoc(doc(db, "users", targetUserId, "reminders", id));
         },
       },
     ]);
   };
-
-  const handleToggleReminder = async (id: string, enabled: boolean) => {
-    const targetUserId =
-      userType === "caregiver" ? selectedPatientId : user?.uid;
-    if (!targetUserId) return;
-
-    const reminder = reminders.find((r) => r.id === id);
-
-    if (!enabled) {
-      // Cancel all alarms for this reminder
-      if (reminder) {
-        for (const time of reminder.times || ["08:00"]) {
-          await cancelMedicationAlarm(`${targetUserId}_${id}_${time}`);
-        }
-      }
-    } else {
-      // Re-schedule alarms
-      if (reminder && reminder.times && reminder.times.length > 0) {
-        const isOneTime = !reminder.days || reminder.days.length === 0;
-
-        for (const time of reminder.times) {
-          const [hours, minutes] = time.split(":").map(Number);
-
-          if (isOneTime && reminder.scheduledDate) {
-            await scheduleMedicationAlarm(
-              `${targetUserId}_${id}`,
-              reminder.medicationName,
-              reminder.medicationDosage,
-              reminder.times || ["08:00"], // ✅ times array
-              [], // ✅ empty days
-            );
-          } else if (reminder.days && reminder.days.length > 0) {
-            await scheduleMedicationAlarm(
-              `${targetUserId}_${id}`,
-              reminder.medicationName,
-              reminder.medicationDosage,
-              reminder.times || ["08:00"], // ✅ times array
-              reminder.days, // ✅ day names
-            );
-          }
-        }
-      }
-    }
-
-    await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
-      enabled,
-    });
-  };
-
   const resetReminderForm = () => {
     setReminderForm({
       times: ["08:00"],
@@ -1436,24 +1382,49 @@ export default function MedicationsScreen() {
                   </View>
                 )}
               </View>
-
               {/* Dosage */}
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Dosage *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={medicationForm.dosage}
-                  onChangeText={(text) =>
-                    setMedicationForm({ ...medicationForm, dosage: text })
-                  }
-                  placeholder="e.g., 10mg"
-                  placeholderTextColor={Colors.textTertiary}
-                />
-              </View>
 
+                <View style={styles.formRow}>
+                  {/* Number Input */}
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginRight: 8 }]}
+                    value={medicationForm.dosageAmount?.toString()}
+                    onChangeText={(text) =>
+                      setMedicationForm({
+                        ...medicationForm,
+                        dosageAmount: parseInt(text) || 0,
+                      })
+                    }
+                    placeholder="e.g. 500"
+                    placeholderTextColor={Colors.textTertiary}
+                    keyboardType="numeric"
+                  />
+
+                  {/* Unit Input - Now Editable */}
+                  <TextInput
+                    style={[styles.input, styles.unitInput]}
+                    value={medicationForm.dosageUnit || "mg"}
+                    onChangeText={(text) => {
+                      // Only allow alphabetic characters
+                      const cleaned = text.replace(/[^a-zA-Z]/g, "");
+                      setMedicationForm({
+                        ...medicationForm,
+                        dosageUnit: cleaned || "mg", // Fall back to "mg" if empty
+                      });
+                    }}
+                    placeholder="mg"
+                    placeholderTextColor={Colors.textTertiary}
+                    maxLength={5}
+                  />
+                </View>
+
+                <Text style={styles.helperText}>Amount per tablet/capsule</Text>
+              </View>
               {/* Quantity */}
               <View style={styles.formGroup}>
-                <Text style={styles.label}>Quantity</Text>
+                <Text style={styles.label}>Amount</Text>
                 <TextInput
                   style={styles.input}
                   value={medicationForm.quantity?.toString()}
@@ -1468,7 +1439,6 @@ export default function MedicationsScreen() {
                   keyboardType="numeric"
                 />
               </View>
-
               {/* Refill Reminder Switch */}
               <View style={styles.formGroup}>
                 <View style={styles.switchContainer}>
@@ -1486,7 +1456,6 @@ export default function MedicationsScreen() {
                   />
                 </View>
               </View>
-
               {/* Refill Threshold */}
               {medicationForm.refillReminder && (
                 <View style={styles.formGroup}>
@@ -1506,7 +1475,6 @@ export default function MedicationsScreen() {
                   />
                 </View>
               )}
-
               {/* Notes */}
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Notes (Optional)</Text>
@@ -1592,14 +1560,14 @@ export default function MedicationsScreen() {
                             ...reminderForm,
                             medicationId: med.id,
                             medicationName: med.name,
-                            medicationDosage: med.dosage,
+                            medicationDosage: getDosageDisplay(med), // ✅ Use helper
                           });
                         }}
                       >
                         <View>
                           <Text style={styles.selectorMedName}>{med.name}</Text>
                           <Text style={styles.selectorMedDosage}>
-                            {med.dosage}
+                            {getDosageDisplay(med)} {/* ✅ Use helper */}
                           </Text>
                         </View>
                         <Ionicons
@@ -1619,7 +1587,7 @@ export default function MedicationsScreen() {
                 <View style={styles.selectedMedicationInfo}>
                   <Text style={styles.selectedMedicationName}>
                     {selectedMedicationForReminder.name}{" "}
-                    {selectedMedicationForReminder.dosage}
+                    {getDosageDisplay(selectedMedicationForReminder)}
                   </Text>
                   {/* <TouchableOpacity
                     onPress={() => setSelectedMedicationForReminder(null)}
@@ -2105,7 +2073,7 @@ export default function MedicationsScreen() {
                         }
                       />
                       <Text style={styles.medCheckText}>
-                        {med.name} {med.dosage}
+                        {med.name} {getDosageDisplay(med)} {/* ✅ Use helper */}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -2653,5 +2621,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textSecondary,
     flex: 1,
+  },
+  formRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  helperText: {
+    fontSize: 12,
+    color: Colors.textTertiary,
+    marginTop: 4,
+  },
+  unitDropdown: {
+    width: 80,
+    height: 52,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: Colors.surface, // instead of Colors.card
+  },
+
+  unitText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: Colors.text, // instead of Colors.textPrimary
+  },
+  // Find the styles object and add this:
+  unitInput: {
+    width: 80,
+    textAlign: "center",
   },
 });

@@ -7,7 +7,8 @@ import Colors from "../../constants/colors";
 interface Medication {
   id: string;
   name: string;
-  dosage: string;
+  dosageAmount?: number; // ✅ Add this
+  dosageUnit?: string;
   generic_name?: string;
   quantity: number;
   active: boolean;
@@ -15,6 +16,7 @@ interface Medication {
   ingredients?: string[];
   refillReminder?: boolean;
   refillThreshold?: number;
+  drug_id?: string;
 }
 
 interface Reminder {
@@ -35,7 +37,20 @@ interface MedicationsTabProps {
   canDelete?: boolean;
   canManageReminders?: boolean;
 }
+// 2. Add a helper function before the component:
+const getDosageDisplay = (medication: Medication): string => {
+  // If there's a combined dosage string, use it
+  if (medication.dosage) return medication.dosage;
 
+  // If we have separate fields, combine them
+  if (medication.dosageAmount !== undefined) {
+    const unit = medication.dosageUnit || "mg";
+    return `${medication.dosageAmount} ${unit}`;
+  }
+
+  // Fallback
+  return "No dosage set";
+};
 export const MedicationsTab: React.FC<MedicationsTabProps> = ({
   medications,
   searchQuery,
@@ -48,11 +63,13 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
   canDelete = true,
   canManageReminders = true,
 }) => {
-  const filteredMedications = medications.filter(
-    (med) =>
+  const filteredMedications = medications.filter((med) => {
+    const dosageDisplay = getDosageDisplay(med); // ✅ Use helper
+    return (
       med.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      med.dosage.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
+      dosageDisplay.toLowerCase().includes(searchQuery.toLowerCase()) // ✅
+    );
+  });
 
   if (filteredMedications.length === 0) {
     return (
@@ -118,8 +135,9 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
             </View>
           </View>
 
-          <Text style={styles.medicationDosage}>{medication.dosage}</Text>
-
+          <Text style={styles.medicationDosage}>
+            {getDosageDisplay(medication)}
+          </Text>
           {medication.generic_name &&
             medication.generic_name !== medication.name && (
               <Text style={styles.genericName}>{medication.generic_name}</Text>

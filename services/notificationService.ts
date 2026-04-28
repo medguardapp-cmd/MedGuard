@@ -101,7 +101,6 @@ export const checkMissedAndLateDoses = async (
   }
 };
 
-// 2. Check for consecutive missed days
 export const checkConsecutiveMissedDays = async (
   reminders: any[],
   takenLogs: any[],
@@ -114,12 +113,68 @@ export const checkConsecutiveMissedDays = async (
     if (!reminder.enabled) continue;
     if (notifiedConsecutiveRef.current.has(reminder.id)) continue;
 
-    let missedDays = 0;
     const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
 
-    for (let i = 0; i < 7; i++) {
+    // Resolve when this reminder was created
+    let createdAt: Date | null = null;
+
+    if (reminder.createdAt) {
+      if (reminder.createdAt.seconds) {
+        createdAt = new Date(reminder.createdAt.seconds * 1000);
+      } else if (reminder.createdAt.toDate) {
+        createdAt = reminder.createdAt.toDate();
+      } else {
+        createdAt = new Date(reminder.createdAt);
+      }
+    }
+
+    // ✅ If no createdAt, use yesterday as fallback (skip the check)
+    if (!createdAt) {
+      console.log(`Skipping ${reminder.medicationName} - no createdAt`);
+      continue;
+    }
+
+    const createdDayStart = new Date(createdAt);
+    createdDayStart.setHours(0, 0, 0, 0);
+
+    // ✅ Calculate days since creation
+    const daysSinceCreation = Math.floor(
+      (todayStart.getTime() - createdDayStart.getTime()) /
+        (1000 * 60 * 60 * 24),
+    );
+
+    console.log(
+      `${reminder.medicationName}: created=${createdDayStart.toDateString()}, daysSinceCreation=${daysSinceCreation}`,
+    );
+
+    // ✅ If created today or yesterday, skip entirely
+    if (daysSinceCreation < 2) {
+      console.log(
+        `Skipping ${reminder.medicationName} - too new (${daysSinceCreation} days)`,
+      );
+      continue;
+    }
+
+    let missedDays = 0;
+
+    // Only check days that exist AFTER the medication was created
+    const maxDaysToCheck = Math.min(7, daysSinceCreation);
+
+    for (let i = 1; i <= maxDaysToCheck; i++) {
       const d = new Date(now);
       d.setDate(now.getDate() - i);
+
+      const dayStart = new Date(d);
+      dayStart.setHours(0, 0, 0, 0);
+
+      // Skip days before creation
+      if (dayStart < createdDayStart) {
+        console.log(`  Day ${i}: before creation, stopping`);
+        break;
+      }
+
       const dateKey = d.toDateString();
       const taken = takenLogs.some(
         (log) =>
@@ -127,9 +182,17 @@ export const checkConsecutiveMissedDays = async (
           (log.reminderId === reminder.id ||
             log.medicationId === reminder.medicationId),
       );
-      if (!taken) missedDays++;
-      else break;
+
+      console.log(`  Day ${i} (${dateKey}): taken=${taken}`);
+
+      if (!taken) {
+        missedDays++;
+      } else {
+        break; // Stop counting once we find a taken day
+      }
     }
+
+    console.log(`  Final missedDays=${missedDays}, threshold=${THRESHOLD}`);
 
     if (missedDays >= THRESHOLD) {
       notifiedConsecutiveRef.current.add(reminder.id);
@@ -141,7 +204,7 @@ export const checkConsecutiveMissedDays = async (
           reminderId: reminder.id,
           type: "consecutive-missed",
           days: missedDays,
-          medicationName: reminder.medicationName, // ✅ Add for email
+          medicationName: reminder.medicationName,
         },
         sendPush: true,
         channelId: "medications",

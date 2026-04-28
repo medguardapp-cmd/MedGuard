@@ -1,6 +1,7 @@
 // app/(tabs)/index.tsx
 import { NotificationBell } from "@/components/NotificationBell";
 import { Ionicons } from "@expo/vector-icons";
+import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import {
   addDoc,
@@ -78,7 +79,8 @@ interface Medication {
   drug_ids: string[];
   name: string;
   generic_name: string;
-  dosage: string;
+  dosageAmount?: number; // ✅ Add
+  dosageUnit?: string;
   active: boolean;
   is_combination: boolean;
   ingredients: string[];
@@ -157,13 +159,24 @@ interface ReminderStatusLog {
   takenVariance?: "early" | "late" | "on-time" | null;
   updatedAt: any;
 }
-
+const getDosageDisplay = (medication: {
+  dosage?: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
+}): string => {
+  if (medication.dosage) return medication.dosage;
+  if (medication.dosageAmount !== undefined) {
+    const unit = medication.dosageUnit || "mg";
+    return `${medication.dosageAmount} ${unit}`;
+  }
+  return "No dosage set";
+};
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const LATE_THRESHOLD = 60; // minutes - after this time, show as "Late"
-const MISSED_THRESHOLD = 360;
+const SOFT_MISSED_THRESHOLD = 360;
 
 const normalizeDate = (date: Date): Date => {
   const normalized = new Date(date);
@@ -660,7 +673,8 @@ export default function HomeScreen() {
   const [quickTakeForm, setQuickTakeForm] = useState({
     medicationId: "",
     name: "",
-    dosage: "",
+    dosageAmount: 0, // ✅ Add
+    dosageUnit: "mg",
     time: "",
   });
   const [quickTakeSearch, setQuickTakeSearch] = useState<
@@ -1319,6 +1333,8 @@ export default function HomeScreen() {
       medicationId: med?.id ?? "",
       name: med?.name ?? "",
       dosage: med?.dosage ?? "",
+      dosageAmount: med?.dosageAmount ?? 0, // ✅ Add
+      dosageUnit: med?.dosageUnit ?? "mg",
       time: `${hh}:${mm}`,
     });
     setQuickTakeSearch([]);
@@ -1368,11 +1384,14 @@ export default function HomeScreen() {
       return;
     }
     try {
+      const dosageString = `${quickTakeForm.dosageAmount || 0} ${quickTakeForm.dosageUnit || "mg"}`;
+
       await addDoc(collection(db, "users", targetUserId, "taken_logs"), {
         medicationId: quickTakeForm.medicationId || null,
         reminderId: "quick-take",
         name: quickTakeForm.name.trim(),
-        dosage: quickTakeForm.dosage.trim(),
+        dosageAmount: quickTakeForm.dosageAmount || 0, // ✅ New format
+        dosageUnit: quickTakeForm.dosageUnit || "mg",
         takenAt: serverTimestamp(),
         dateKey: dateKey(selectedDate),
       });
@@ -1931,58 +1950,8 @@ export default function HomeScreen() {
             </View>
           )}
           {/* As Needed (Quick Take) Logs */}
-          {isTodaySelected &&
-            takenLogs.filter(
-              (l) =>
-                l.dateKey === dateKey(selectedDate) &&
-                l.reminderId === "quick-take",
-            ).length > 0 && (
-              <>
-                <Text style={styles.sectionTitle}>As Needed</Text>
-                <View style={styles.medicationsCard}>
-                  {takenLogs
-                    .filter(
-                      (l) =>
-                        l.dateKey === dateKey(selectedDate) &&
-                        l.reminderId === "quick-take",
-                    )
-                    .map((log, index, arr) => (
-                      <View
-                        key={log.id}
-                        style={[
-                          styles.medicationItem,
-                          index === arr.length - 1 && styles.medicationItemLast,
-                        ]}
-                      >
-                        <View style={styles.timeColumn}>
-                          <Text style={styles.medTime}>
-                            {log.takenAt?.toDate
-                              ? formatTime12h(
-                                  log.takenAt
-                                    .toDate()
-                                    .toTimeString()
-                                    .slice(0, 5),
-                                )
-                              : "--"}
-                          </Text>
-                        </View>
-                        <View style={styles.medInfo}>
-                          <Text style={styles.medName}>{log.name}</Text>
-                          <Text style={styles.medDosage}>{log.dosage}</Text>
-                        </View>
-                        <View style={styles.takenBadge}>
-                          <Ionicons
-                            name="checkmark"
-                            size={12}
-                            color={Colors.success}
-                          />
-                          <Text style={styles.takenBadgeText}>Taken</Text>
-                        </View>
-                      </View>
-                    ))}
-                </View>
-              </>
-            )}
+          {/* Quick-take dosage input */}
+
           {/* <Text style={styles.sectionTitle}>Quick Actions</Text> */}
 
           {/* <View style={styles.actionsContainer}>
@@ -2123,6 +2092,135 @@ export default function HomeScreen() {
               <Text style={styles.actionText}>SOS</Text>
             </TouchableOpacity>
           </View> */}
+          {/* As Needed (Quick Take) Logs */}
+          {/* As Needed (Quick Take) Logs */}
+          {takenLogs.filter(
+            (l) =>
+              l.dateKey === dateKey(selectedDate) &&
+              l.reminderId === "quick-take",
+          ).length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>As Needed</Text>
+              <View style={styles.medicationsCard}>
+                {takenLogs
+                  .filter(
+                    (l) =>
+                      l.dateKey === dateKey(selectedDate) &&
+                      l.reminderId === "quick-take",
+                  )
+                  .map((log, index, arr) => (
+                    <View
+                      key={log.id}
+                      style={[
+                        styles.medicationItem,
+                        index === arr.length - 1 && styles.medicationItemLast,
+                      ]}
+                    >
+                      <View style={styles.timeColumn}>
+                        <Text style={styles.medTime}>
+                          {log.takenAt?.toDate
+                            ? formatTime12h(
+                                log.takenAt.toDate().toTimeString().slice(0, 5),
+                              )
+                            : "--"}
+                        </Text>
+                      </View>
+                      <View style={styles.medInfo}>
+                        <Text style={styles.medName}>{log.name}</Text>
+                        <Text style={styles.medDosage}>
+                          {(() => {
+                            const medication = medications.find(
+                              (m) => m.id === log.medicationId,
+                            );
+                            return medication
+                              ? getDosageDisplay(medication)
+                              : log.dosageAmount
+                                ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
+                                : log.dosage || "—";
+                          })()}
+                        </Text>
+                      </View>
+                      <View style={styles.takenBadge}>
+                        <Ionicons
+                          name="checkmark"
+                          size={12}
+                          color={Colors.success}
+                        />
+                        <Text style={styles.takenBadgeText}>Taken</Text>
+                      </View>
+                      {/* Delete Button */}
+                      <TouchableOpacity
+                        style={styles.deleteButton}
+                        onPress={() => {
+                          Alert.alert(
+                            "Delete Log",
+                            "Remove this dose from your history?",
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              {
+                                text: "Delete",
+                                style: "destructive",
+                                onPress: async () => {
+                                  const targetUserId =
+                                    userType === "caregiver"
+                                      ? selectedPatientId
+                                      : auth.currentUser?.uid;
+                                  if (targetUserId) {
+                                    await deleteDoc(
+                                      doc(
+                                        db,
+                                        "users",
+                                        targetUserId,
+                                        "taken_logs",
+                                        log.id,
+                                      ),
+                                    );
+                                  }
+                                },
+                              },
+                            ],
+                          );
+                        }}
+                      >
+                        <Ionicons
+                          name="ellipsis-vertical"
+                          size={16}
+                          color={Colors.textTertiary}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+              </View>
+            </>
+          )}
+          <TouchableOpacity
+            style={styles.testAlarmButton}
+            onPress={async () => {
+              // Test alarm that uses your custom sound and vibration
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: "🔔 Test Alarm",
+                  body: "Testing alarm sound and vibration!",
+                  sound: "alarm.mp3", // ✅ Your custom alarm
+                  priority: Notifications.AndroidNotificationPriority.MAX,
+                  categoryIdentifier: "medication_action",
+                },
+                trigger: {
+                  type: Notifications.SchedulableTriggerInputTypes
+                    .TIME_INTERVAL,
+                  seconds: 3,
+                },
+              });
+
+              Alert.alert(
+                "Alarm Test",
+                "Alarm will fire in 3 seconds with custom sound and vibration",
+              );
+            }}
+          >
+            <Ionicons name="alarm" size={16} color={Colors.primary} />
+            <Text style={styles.testAlarmText}>Test Alarm</Text>
+          </TouchableOpacity>
           {/* Log a Dose chips */}
           {canTakeOnSelectedDate &&
             medications.filter((m) => m.active).length > 0 && (
@@ -2169,37 +2267,6 @@ export default function HomeScreen() {
                         </Text>
                       </TouchableOpacity>
                     ))}
-                  <TouchableOpacity
-                    style={[
-                      styles.quickTakeChip,
-                      { borderStyle: "dashed" },
-                      !safeCan.markAsTaken() && styles.disabledChip,
-                    ]}
-                    onPress={() => safeCan.markAsTaken() && openQuickTake()}
-                    disabled={!safeCan.markAsTaken()}
-                  >
-                    <Ionicons
-                      name="add"
-                      size={14}
-                      color={
-                        !safeCan.markAsTaken()
-                          ? Colors.textTertiary
-                          : Colors.textSecondary
-                      }
-                    />
-                    <Text
-                      style={[
-                        styles.quickTakeChipText,
-                        {
-                          color: !safeCan.markAsTaken()
-                            ? Colors.textTertiary
-                            : Colors.textSecondary,
-                        },
-                      ]}
-                    >
-                      Other
-                    </Text>
-                  </TouchableOpacity>
                 </ScrollView>
               </>
             )}
@@ -2298,15 +2365,39 @@ export default function HomeScreen() {
 
             <View style={styles.formGroup}>
               <Text style={styles.label}>Dosage</Text>
-              <TextInput
-                style={styles.input}
-                value={quickTakeForm.dosage}
-                onChangeText={(t) =>
-                  setQuickTakeForm((p) => ({ ...p, dosage: t }))
-                }
-                placeholder="e.g. 500mg, 1 tablet"
-                placeholderTextColor={Colors.textTertiary}
-              />
+
+              <View style={styles.formRow}>
+                {/* Amount Input */}
+                <TextInput
+                  style={[styles.input, { flex: 1, marginRight: 8 }]}
+                  value={quickTakeForm.dosageAmount?.toString()}
+                  onChangeText={(text) =>
+                    setQuickTakeForm({
+                      ...quickTakeForm,
+                      dosageAmount: parseInt(text) || 0,
+                    })
+                  }
+                  placeholder="Amount"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="numeric"
+                />
+
+                {/* Unit Input */}
+                <TextInput
+                  style={[styles.input, styles.unitInput]}
+                  value={quickTakeForm.dosageUnit || "mg"}
+                  onChangeText={(text) => {
+                    const cleaned = text.replace(/[^a-zA-Z]/g, "");
+                    setQuickTakeForm({
+                      ...quickTakeForm,
+                      dosageUnit: cleaned || "mg",
+                    });
+                  }}
+                  placeholder="mg"
+                  placeholderTextColor={Colors.textTertiary}
+                  maxLength={5}
+                />
+              </View>
             </View>
 
             <View style={styles.formGroup}>
@@ -2812,6 +2903,36 @@ const styles = StyleSheet.create({
   calendarTodayText: {
     color: Colors.primary,
     fontWeight: "700",
+  },
+  unitInput: {
+    width: 80,
+    textAlign: "center",
+  },
+  formRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  deleteButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  testAlarmButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.primary + "40",
+    backgroundColor: Colors.primary + "08",
+    alignSelf: "center",
+    marginBottom: 16,
+  },
+  testAlarmText: {
+    fontSize: 13,
+    color: Colors.primary,
+    fontWeight: "500",
   },
 });
 function cleanupPastSnapshots(targetUserId: any) {
