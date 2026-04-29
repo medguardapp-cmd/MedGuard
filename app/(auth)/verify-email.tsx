@@ -4,13 +4,13 @@ import { sendEmailVerification } from "firebase/auth";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../hooks/useAuth";
 import { auth } from "../../lib/firebase";
 

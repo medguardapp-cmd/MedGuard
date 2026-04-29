@@ -3,12 +3,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
-    FlatList,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  FlatList,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useNotifications } from "../../contexts/NotificationContext";
 
@@ -95,7 +95,7 @@ export default function NotificationsScreen() {
           />
           <Text style={styles.emptyTitle}>No notifications</Text>
           <Text style={styles.emptyText}>
-            You're all caught up! Check back later for updates.
+            You&apos;re all caught up! Check back later for updates.
           </Text>
         </View>
       ) : (
@@ -145,7 +145,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingTop: 50,
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",

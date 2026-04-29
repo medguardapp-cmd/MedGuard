@@ -8,7 +8,6 @@ import React, { useEffect, useState } from "react";
 import {
   Alert,
   Modal,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,13 +15,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   SelectedPatientProvider,
   useSelectedPatient,
 } from "../contexts/SelectedPatientContext";
 import { useCaregiverPermissions } from "../hooks/useCaregiverPermissions";
 import { db } from "../lib/firebase";
-
 // Inner component that uses the hooks
 function PatientInfoContent() {
   const router = useRouter();
@@ -149,7 +148,8 @@ function PatientInfoContent() {
           dietaryPreferences: data.medicalData.dietaryPreferences || "",
           lifestyleNotes: data.medicalData.lifestyleNotes || "",
           notes: data.medicalData.notes || "",
-          updatedAt: (data.medicalData as any).updatedAt || null,});
+          updatedAt: (data.medicalData as any).updatedAt || null,
+        });
         return;
       }
 
@@ -314,7 +314,7 @@ function PatientInfoContent() {
           </View>
           <Text style={styles.blockedTitle}>Access Restricted</Text>
           <Text style={styles.blockedText}>
-            You don't have permission to view this patient's medical
+            You don&apos;t have permission to view this patient&apos;s medical
             information.
           </Text>
           <Text style={styles.blockedSubtext}>
@@ -371,7 +371,7 @@ function PatientInfoContent() {
             <Ionicons name="lock-closed" size={48} color="#cbd5e1" />
             <Text style={styles.editOverlayTitle}>Edit Restricted</Text>
             <Text style={styles.editOverlayText}>
-              You don't have permission to edit this patient's medical
+              You don&apos;t have permission to edit this patient&apos;s medical
               information.
             </Text>
             <TouchableOpacity

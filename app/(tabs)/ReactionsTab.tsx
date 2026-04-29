@@ -4,13 +4,13 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
 
 interface ReactionsTabProps {
@@ -165,7 +165,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         />
         <Text style={styles.emptyText}>Add medications to see AI analysis</Text>
         <Text style={styles.emptySubtext}>
-          We'll analyze interactions, side effects, and provide insights
+          We&apos;ll analyze interactions, side effects, and provide insights
         </Text>
       </View>
     );
@@ -178,7 +178,7 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
         <View style={styles.todayMedsCard}>
           <View style={styles.todayMedsHeader}>
             <Ionicons name="today" size={20} color={Colors.primary} />
-            <Text style={styles.todayMedsTitle}>Today's Medications</Text>
+            <Text style={styles.todayMedsTitle}>Today&apos;s Medications</Text>
           </View>
           <View style={styles.todayMedsList}>
             {todaysMedications.map((med) => (
@@ -729,7 +729,9 @@ export const ReactionsTab: React.FC<ReactionsTabProps> = ({
                       </View>
                     </View>
                     {report.note && (
-                      <Text style={styles.communityNote}>"{report.note}"</Text>
+                      <Text style={styles.communityNote}>
+                        &quot;{report.note}&quot;
+                      </Text>
                     )}
                   </View>
                 ))}

@@ -6,7 +6,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,8 +13,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../hooks/useAuth";
-
 // --- Firebase error mapper ---
 const mapFirebaseError = (raw: string): string => {
   const code = raw?.match(/\(([^)]+)\)/)?.[1] ?? raw ?? "";

@@ -4,7 +4,7 @@ import { Tabs } from "expo-router";
 import React from "react";
 import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "../../constants/colors"; // ✅ Fixed
+import Colors from "../../constants/colors";
 
 export default function CaregiverOnlyLayout() {
   const insets = useSafeAreaInsets();

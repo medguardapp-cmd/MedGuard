@@ -4,21 +4,20 @@ import { useRouter } from "expo-router";
 import { doc, updateDoc } from "firebase/firestore";
 import React, { useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useOnboarding } from "../contexts/OnboardingContext";
 import { useAuth } from "../hooks/useAuth";
 import { db } from "../lib/firebase";
-
 // Genders for selection
 const GENDERS = [
   { id: "male", label: "Male" },
@@ -208,9 +207,6 @@ export default function EditProfileScreen() {
                 {getLastName().charAt(0)}
               </Text>
             </View>
-            <TouchableOpacity style={styles.editImageButton}>
-              <Ionicons name="camera" size={20} color="#ffffff" />
-            </TouchableOpacity>
           </View>
           <Text style={styles.userEmail}>{user?.email}</Text>
         </View>
@@ -349,7 +345,6 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
-    paddingTop: 50,
   },
   backButton: {
     padding: 4,

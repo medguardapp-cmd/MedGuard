@@ -2,6 +2,7 @@
 import { NotificationBell } from "@/components/NotificationBell";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import {
   addDoc,
   collection,
@@ -26,7 +27,9 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -35,7 +38,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import Colors from "../../constants/colors";
 import { useNotifications } from "../../contexts/NotificationContext";
 import { useSelectedPatient } from "../../contexts/SelectedPatientContext";
@@ -54,7 +60,6 @@ import {
   checkMissedAndLateDoses,
   checkSevereInteractions,
 } from "../../services/notificationService";
-
 const originalConsoleLog = console.log;
 console.log = (...args) => {
   // Skip the markAsTaken check logs
@@ -655,6 +660,7 @@ async function backfillReminderStatusLogs(
 // Main Screen
 // ─────────────────────────────────────────────
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
@@ -1033,14 +1039,9 @@ export default function HomeScreen() {
     const currentTimeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     if (isPastDay) {
-      // ✅ BUILD FROM LOGS, not from active reminders
-      // This way disabled/deleted reminders still appear for past dates
-
-      // 1. Start with taken logs for this date
       const takenItems: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId !== "quick-take")
         .map((l) => {
-          // reminderId is stored as `${baseReminderId}_${HH:MM}` — extract scheduled time
           const parts = l.reminderId.split("_");
           const lastPart = parts[parts.length - 1];
           const scheduledTime =
@@ -1056,9 +1057,10 @@ export default function HomeScreen() {
             reminderId: l.reminderId,
             medicationId: l.medicationId,
             name: l.name,
-            dosage: `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
-            time: scheduledTime, // ← scheduled time (for column + sorting)
-            actualTakenTime, // ← real taken time (for badge)
+            dosageAmount: l.dosageAmount,
+            dosageUnit: l.dosageUnit || "mg",
+            time: scheduledTime,
+            actualTakenTime,
             taken: true,
             missed: false,
             missedSoft: false,
@@ -1071,45 +1073,91 @@ export default function HomeScreen() {
           };
         });
 
-      // 2. Add missed log entries that have no corresponding taken log
+      // Check active reminders for missed doses
+      const activeRemindersForDate = getRemindersForDate(
+        normalizedDate,
+        reminders,
+        medications,
+      );
+
+      const reminderMissedItems: ScheduleItem[] =
+        activeRemindersForDate.flatMap((r) =>
+          (r.times || ["08:00"])
+            .map((time) => {
+              const timeSpecificId = `${r.id}_${time}`;
+              const wasTaken = logsForDate.some(
+                (l) => l.reminderId === timeSpecificId || l.reminderId === r.id,
+              );
+              if (wasTaken) return null;
+
+              const med = medications.find((m) => m.id === r.medicationId);
+              return {
+                reminderId: r.id,
+                medicationId: r.medicationId,
+                name: r.medicationName,
+                dosageAmount: med?.dosageAmount,
+                dosageUnit: med?.dosageUnit || "mg",
+                time,
+                actualTakenTime: null,
+                taken: false,
+                missed: true,
+                missedSoft: false,
+                late: false,
+                takenLogId: undefined,
+                takenVariance: null,
+                hasInteraction: false,
+                interactionSeverity: null,
+                interactionCount: 0,
+              } as ScheduleItem;
+            })
+            .filter((item): item is ScheduleItem => item !== null),
+        );
+
+      // Legacy: missed_logs for deleted/disabled reminders no longer in activeRemindersForDate
       const missedForDate = missedLogs.filter((l) => l.dateKey === dk);
-      const missedItems: ScheduleItem[] = missedForDate
+      const legacyMissedItems: ScheduleItem[] = missedForDate
         .filter(
           (m) =>
             !logsForDate.some(
               (l) =>
                 l.reminderId === `${m.reminderId}_${m.scheduledTime}` ||
                 l.reminderId === m.reminderId,
-            ),
+            ) && !activeRemindersForDate.some((r) => r.id === m.reminderId),
         )
-        .map((m) => ({
-          reminderId: m.reminderId,
-          medicationId: m.medicationId,
-          name: m.name,
-          dosage: `${m.dosageAmount ?? ""}${m.dosageUnit ?? ""}`,
-          time: m.scheduledTime,
-          taken: false,
-          missed: true,
-          missedSoft: false,
-          late: false,
-          takenLogId: undefined,
-          takenVariance: null,
-          hasInteraction: false,
-          interactionSeverity: null,
-          interactionCount: 0,
-        }));
+        .map((m) => {
+          const med = medications.find((med) => med.id === m.medicationId);
+          return {
+            reminderId: m.reminderId,
+            medicationId: m.medicationId,
+            name: m.name,
+            dosageAmount: med?.dosageAmount,
+            dosageUnit: med?.dosageUnit || "mg",
+            time: m.scheduledTime,
+            actualTakenTime: null,
+            taken: false,
+            missed: true,
+            missedSoft: false,
+            late: false,
+            takenLogId: undefined,
+            takenVariance: null,
+            hasInteraction: false,
+            interactionSeverity: null,
+            interactionCount: 0,
+          };
+        });
 
-      // 3. Quick-takes
       const quickTakes: ScheduleItem[] = logsForDate
         .filter((l) => l.reminderId === "quick-take")
         .map((l) => ({
           reminderId: l.id,
           medicationId: l.medicationId,
           name: l.name,
-          dosage: `${l.dosageAmount ?? ""}${l.dosageUnit ?? ""}`,
+          dosageAmount: l.dosageAmount,
+          dosageUnit: l.dosageUnit || "mg",
           time: l.takenAt?.toDate
             ? l.takenAt.toDate().toTimeString().slice(0, 5)
             : "00:00",
+          actualTakenTime: null,
           taken: true,
           missed: false,
           missedSoft: false,
@@ -1121,12 +1169,16 @@ export default function HomeScreen() {
           interactionCount: 0,
         }));
 
-      const all = [...takenItems, ...missedItems, ...quickTakes];
+      const all = [
+        ...takenItems,
+        ...reminderMissedItems,
+        ...legacyMissedItems,
+        ...quickTakes,
+      ];
       all.sort((a, b) => a.time.localeCompare(b.time));
       setSchedule(all);
       return;
     }
-
     // Today / future: calculate from reminders
     // ✅ FIX: Include all reminders that are active OR have been taken today
     const dayReminders = getRemindersForDate(
@@ -1499,473 +1551,485 @@ export default function HomeScreen() {
   // Render
   // ─────────────────────────────────────────────
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Top Header */}
-      <View style={styles.mainHeader}>
-        <Text style={styles.headerTitle}>MEDGUARD</Text>
-        <View style={styles.headerIcons}>
-          <NotificationBell />
-          {/* <TouchableOpacity style={styles.iconButton}>
+    <View style={{ flex: 1, backgroundColor: Colors.primary }}>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor: Colors.background }]}
+        edges={["bottom", "left", "right"]}
+      >
+        <StatusBar
+          style="dark"
+          backgroundColor={Colors.primary}
+          translucent={false}
+        />
+        {/* Top Header */}
+        <View style={[styles.mainHeader, { paddingTop: insets.top + 5 }]}>
+          <Text style={styles.headerTitle}>MEDGUARD</Text>
+          <View style={styles.headerIcons}>
+            <NotificationBell />
+            {/* <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="person-outline" size={24} color={Colors.surface} />
           </TouchableOpacity> */}
-        </View>
-      </View>
-
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[Colors.primary]}
-            tintColor={Colors.primary}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Patient Selector for Caregivers */}
-        {patients.length > 0 && (
-          <View style={styles.patientSelectorContainer}>
-            <Text style={styles.patientSelectorLabel}>Patient:</Text>
-            <TouchableOpacity
-              style={styles.patientSelectorButton}
-              onPress={() => setShowPatientSelector(!showPatientSelector)}
-            >
-              <Text style={styles.patientSelectorText}>
-                {patients.find((p) => p.id === selectedPatientId)?.name ||
-                  "Select Patient"}
-              </Text>
-              <Ionicons name="chevron-down" size={18} color={Colors.text} />
-            </TouchableOpacity>
-
-            {showPatientSelector && (
-              <View style={styles.patientDropdown}>
-                {patients.map((patient) => (
-                  <TouchableOpacity
-                    key={patient.id}
-                    style={styles.patientDropdownItem}
-                    onPress={() => {
-                      setSelectedPatientId(patient.id);
-                      setShowPatientSelector(false);
-                      refreshDataForPatient(patient.id);
-                    }}
-                  >
-                    <Text style={styles.patientDropdownText}>
-                      {patient.name}
-                    </Text>
-                    {selectedPatientId === patient.id && (
-                      <Ionicons
-                        name="checkmark"
-                        size={18}
-                        color={Colors.primary}
-                      />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
           </View>
-        )}
+        </View>
 
-        {/* Date Header */}
-        <View style={styles.header}>
-          <View style={styles.headerTopRow}>
-            <View style={styles.dateHeader}>
-              <Text style={styles.todayText}>Today</Text>
-              <Text style={styles.fullDate}>{formatDate(today)}</Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.todayButton,
-                isTodaySelected
-                  ? styles.todayButtonActive
-                  : styles.todayButtonInactive,
-              ]}
-              onPress={scrollToToday}
-            >
-              <Ionicons
-                name="today"
-                size={20}
-                color={isTodaySelected ? Colors.primary : Colors.surface}
-              />
-              <Text
-                style={[
-                  styles.todayButtonText,
-                  isTodaySelected
-                    ? styles.todayButtonTextActive
-                    : styles.todayButtonTextInactive,
-                ]}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[Colors.primary]}
+              tintColor={Colors.primary}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Patient Selector for Caregivers */}
+          {patients.length > 0 && (
+            <View style={styles.patientSelectorContainer}>
+              <Text style={styles.patientSelectorLabel}>Patient:</Text>
+              <TouchableOpacity
+                style={styles.patientSelectorButton}
+                onPress={() => setShowPatientSelector(!showPatientSelector)}
               >
-                Today
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Horizontal Calendar */}
-        <View style={styles.calendarContainer}>
-          <ScrollView
-            ref={scrollViewRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.calendarContent}
-            snapToInterval={DAY_WIDTH}
-            decelerationRate="fast"
-          >
-            {days.map((date, index) => {
-              const dotStatus = getDotStatus(date);
-              return (
-                <TouchableOpacity
-                  key={index}
-                  style={[
-                    styles.dayContainer,
-                    isToday(date) &&
-                      !isSelected(date) &&
-                      styles.calendarTodayContainer,
-
-                    isSelected(date) && styles.selectedContainer,
-                  ]}
-                  onPress={() => setSelectedDate(date)}
-                >
-                  <Text
-                    style={[
-                      styles.dayName,
-                      isToday(date) && styles.todayDayText,
-                      isSelected(date) && styles.selectedText,
-                    ]}
-                  >
-                    {DAY_NAMES[date.getDay()]}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.dayNumber,
-                      isToday(date) && styles.todayDayText,
-                      isSelected(date) && styles.selectedText,
-                    ]}
-                  >
-                    {date.getDate()}
-                  </Text>
-                  {dotStatus !== "none" && (
-                    <View
-                      style={[
-                        styles.reminderDot,
-                        {
-                          backgroundColor:
-                            isSelected(date) && dotStatus === "grey"
-                              ? Colors.primary
-                              : dotColorValue(dotStatus),
-                        },
-                      ]}
-                    />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        <View style={styles.content}>
-          {/* Interaction Warning Banner */}
-          {hasAnyInteractionOnDate && (
-            <TouchableOpacity
-              style={[
-                styles.interactionBanner,
-                severeCount > 0 ? styles.severeBanner : styles.mildBanner,
-              ]}
-              onPress={() => {
-                router.navigate("/(tabs)/MedicationsScreen");
-                setTimeout(() => tabEvents.emit("openReactions"), 300);
-              }}
-            >
-              <Ionicons
-                name={severeCount > 0 ? "warning" : "information-circle"}
-                size={20}
-                color={severeCount > 0 ? Colors.error : Colors.warning}
-              />
-              <View style={styles.bannerText}>
-                <Text
-                  style={[
-                    styles.bannerTitle,
-                    { color: severeCount > 0 ? Colors.error : Colors.warning },
-                  ]}
-                >
-                  {severeCount > 0
-                    ? "Severe Interaction Detected"
-                    : "Mild Interaction Detected"}
+                <Text style={styles.patientSelectorText}>
+                  {patients.find((p) => p.id === selectedPatientId)?.name ||
+                    "Select Patient"}
                 </Text>
-                <Text style={styles.bannerSubtitle}>
-                  {severeCount > 0
-                    ? `${severeCount} severe interaction${severeCount > 1 ? "s" : ""} between your medications`
-                    : `${mildCount} mild interaction${mildCount > 1 ? "s" : ""} — check Reactions tab`}
-                </Text>
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={18}
-                color={Colors.textTertiary}
-              />
-            </TouchableOpacity>
-          )}
-          {/* Selected Date Label */}
-          <View style={styles.selectedDateContainer}>
-            <Text style={styles.selectedDateTitle}>
-              {getDayLabel(selectedDate)}
-            </Text>
-            {isFuture(selectedDate) && (
-              <View style={styles.futureBadge}>
-                <Text style={styles.futureBadgeText}>Upcoming</Text>
-              </View>
-            )}
-            {isPast(selectedDate) && (
-              <View style={styles.pastBadge}>
-                <Text style={styles.pastBadgeText}>Past</Text>
-              </View>
-            )}
-          </View>
-          {/* Schedule List */}
-          {loadingInteractions && schedule.length === 0 ? (
-            <View style={styles.loadingCard}>
-              <ActivityIndicator size="small" color={Colors.primary} />
-              <Text style={styles.loadingText}>Checking interactions...</Text>
-            </View>
-          ) : schedule.length > 0 ? (
-            <View style={styles.medicationsCard}>
-              {schedule.map((item, index) => (
-                <View
-                  key={item.reminderId + index}
-                  style={[
-                    styles.medicationItem,
-                    index === schedule.length - 1 && styles.medicationItemLast,
-                    item.missed && styles.medicationItemMissed,
-                  ]}
-                >
-                  <View style={styles.timeColumn}>
-                    <Text
-                      style={[
-                        styles.medTime,
-                        item.missed && styles.medTimeMissed,
-                      ]}
+                <Ionicons name="chevron-down" size={18} color={Colors.text} />
+              </TouchableOpacity>
+
+              {showPatientSelector && (
+                <View style={styles.patientDropdown}>
+                  {patients.map((patient) => (
+                    <TouchableOpacity
+                      key={patient.id}
+                      style={styles.patientDropdownItem}
+                      onPress={() => {
+                        setSelectedPatientId(patient.id);
+                        setShowPatientSelector(false);
+                        refreshDataForPatient(patient.id);
+                      }}
                     >
-                      {formatTime12h(item.time)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.medInfo}>
-                    <View style={styles.medNameRow}>
-                      <Text
-                        style={[
-                          styles.medName,
-                          item.missed && styles.medNameMissed,
-                        ]}
-                      >
-                        {item.name}
+                      <Text style={styles.patientDropdownText}>
+                        {patient.name}
                       </Text>
-                      {item.taken && (
-                        <View style={styles.takenBadge}>
-                          <Ionicons
-                            name="checkmark"
-                            size={12}
-                            color={Colors.success}
-                          />
-                          <Text style={styles.takenBadgeText}>Taken</Text>
-                          {item.actualTakenTime && (
-                            <Text
-                              style={[
-                                styles.takenBadgeText,
-                                { color: Colors.textSecondary },
-                              ]}
-                            >
-                              · {formatTime12h(item.actualTakenTime)}
-                            </Text>
-                          )}
-                          {item.takenVariance === "late" && (
-                            <Text
-                              style={[
-                                styles.takenBadgeText,
-                                { color: Colors.warning },
-                              ]}
-                            >
-                              · Late
-                            </Text>
-                          )}
-                          {item.takenVariance === "early" && (
-                            <Text
-                              style={[
-                                styles.takenBadgeText,
-                                { color: Colors.primary },
-                              ]}
-                            >
-                              · Early
-                            </Text>
-                          )}
-                        </View>
-                      )}
-                      {item.missed && (
-                        <View style={styles.missedBadge}>
-                          <Ionicons
-                            name="close"
-                            size={12}
-                            color={Colors.error}
-                          />
-                          <Text style={styles.missedBadgeText}>Missed</Text>
-                        </View>
-                      )}
-                      {item.missedSoft && (
-                        <View style={styles.missedBadge}>
-                          <Ionicons
-                            name="close"
-                            size={12}
-                            color={Colors.error}
-                          />
-                          <Text style={styles.missedBadgeText}>Missed</Text>
-                        </View>
-                      )}
-
-                      {item.late && !item.missedSoft && (
-                        <View style={styles.lateBadge}>
-                          <Ionicons
-                            name="time"
-                            size={12}
-                            color={Colors.warning}
-                          />
-                          <Text style={styles.lateBadgeText}>Late</Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text
-                      style={[
-                        styles.medDosage,
-                        item.missed && styles.medDosageMissed,
-                      ]}
-                    >
-                      {`${item.dosageAmount ?? ""} ${item.dosageUnit ?? "mg"}`}
-                    </Text>
-                    {item.hasInteraction && (
-                      <View style={styles.tagRow}>
-                        <View
-                          style={[
-                            styles.interactionTag,
-                            item.interactionSeverity === "severe"
-                              ? styles.severeTag
-                              : styles.mildTag,
-                          ]}
-                        >
-                          <Ionicons
-                            name="warning"
-                            size={11}
-                            color={
-                              item.interactionSeverity === "severe"
-                                ? Colors.error
-                                : Colors.warning
-                            }
-                          />
-                          <Text
-                            style={[
-                              styles.tagText,
-                              {
-                                color:
-                                  item.interactionSeverity === "severe"
-                                    ? Colors.error
-                                    : Colors.warning,
-                              },
-                            ]}
-                          >
-                            {item.interactionSeverity === "severe"
-                              ? "Severe"
-                              : "Mild"}{" "}
-                            interaction
-                            {item.interactionCount > 1
-                              ? ` (${item.interactionCount})`
-                              : ""}
-                          </Text>
-                        </View>
-                      </View>
-                    )}
-                  </View>
-
-                  {canTakeOnSelectedDate &&
-                    (isTodaySelected || !item.taken) && (
-                      <TouchableOpacity
-                        style={[
-                          styles.takeButton,
-                          item.taken && styles.takenButton,
-                          !safeCan.markAsTaken() && styles.disabledButton,
-                        ]}
-                        onPress={() => toggleTaken(item)}
-                        disabled={!safeCan.markAsTaken()}
-                      >
-                        <Text
-                          style={[
-                            styles.takeButtonText,
-                            item.taken && styles.takenButtonText,
-                          ]}
-                        >
-                          {item.taken ? "✓" : "Take"}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  {isPast(selectedDate) &&
-                    (!isYesterdaySelected || item.taken) && (
-                      <View style={styles.pastTakenBadge}>
+                      {selectedPatientId === patient.id && (
                         <Ionicons
-                          name={
-                            item.taken ? "checkmark-circle" : "close-circle"
-                          }
-                          size={22}
-                          color={
-                            item.taken ? Colors.success : Colors.error + "80"
-                          }
+                          name="checkmark"
+                          size={18}
+                          color={Colors.primary}
                         />
-                      </View>
-                    )}
-                  {isFuture(selectedDate) && (
-                    <View style={styles.futureIcon}>
-                      <Ionicons
-                        name="time-outline"
-                        size={20}
-                        color={Colors.textTertiary}
-                      />
-                    </View>
-                  )}
+                      )}
+                    </TouchableOpacity>
+                  ))}
                 </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.noMedicationsCard}>
-              <Ionicons
-                name="calendar-outline"
-                size={60}
-                color={Colors.textTertiary}
-              />
-              <Text style={styles.noMedicationsText}>
-                {isPast(selectedDate)
-                  ? "No medications were scheduled or taken on this day"
-                  : isFuture(selectedDate)
-                    ? "No medications scheduled for this day"
-                    : "No medications scheduled for today"}
-              </Text>
-              {canTakeOnSelectedDate && (
-                <TouchableOpacity
-                  style={[
-                    styles.takeButton,
-                    { marginTop: 16, paddingHorizontal: 20 },
-                    !safeCan.markAsTaken() && styles.disabledButton,
-                  ]}
-                  onPress={() => openQuickTake()}
-                  disabled={!safeCan.markAsTaken()}
-                >
-                  <Text style={styles.takeButtonText}>Log a dose</Text>
-                </TouchableOpacity>
               )}
             </View>
           )}
-          {/* As Needed (Quick Take) Logs */}
-          {/* Quick-take dosage input */}
 
-          {/* <Text style={styles.sectionTitle}>Quick Actions</Text> */}
+          {/* Date Header */}
+          <View style={styles.header}>
+            <View style={styles.headerTopRow}>
+              <View style={styles.dateHeader}>
+                <Text style={styles.todayText}>Today</Text>
+                <Text style={styles.fullDate}>{formatDate(today)}</Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.todayButton,
+                  isTodaySelected
+                    ? styles.todayButtonActive
+                    : styles.todayButtonInactive,
+                ]}
+                onPress={scrollToToday}
+              >
+                <Ionicons
+                  name="today"
+                  size={20}
+                  color={isTodaySelected ? Colors.primary : Colors.surface}
+                />
+                <Text
+                  style={[
+                    styles.todayButtonText,
+                    isTodaySelected
+                      ? styles.todayButtonTextActive
+                      : styles.todayButtonTextInactive,
+                  ]}
+                >
+                  Today
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
-          {/* <View style={styles.actionsContainer}>
+          {/* Horizontal Calendar */}
+          <View style={styles.calendarContainer}>
+            <ScrollView
+              ref={scrollViewRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.calendarContent}
+              snapToInterval={DAY_WIDTH}
+              decelerationRate="fast"
+            >
+              {days.map((date, index) => {
+                const dotStatus = getDotStatus(date);
+                return (
+                  <TouchableOpacity
+                    key={index}
+                    style={[
+                      styles.dayContainer,
+                      isToday(date) &&
+                        !isSelected(date) &&
+                        styles.calendarTodayContainer,
+
+                      isSelected(date) && styles.selectedContainer,
+                    ]}
+                    onPress={() => setSelectedDate(date)}
+                  >
+                    <Text
+                      style={[
+                        styles.dayName,
+                        isToday(date) && styles.todayDayText,
+                        isSelected(date) && styles.selectedText,
+                      ]}
+                    >
+                      {DAY_NAMES[date.getDay()]}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.dayNumber,
+                        isToday(date) && styles.todayDayText,
+                        isSelected(date) && styles.selectedText,
+                      ]}
+                    >
+                      {date.getDate()}
+                    </Text>
+                    {dotStatus !== "none" && (
+                      <View
+                        style={[
+                          styles.reminderDot,
+                          {
+                            backgroundColor:
+                              isSelected(date) && dotStatus === "grey"
+                                ? Colors.primary
+                                : dotColorValue(dotStatus),
+                          },
+                        ]}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          <View style={styles.content}>
+            {/* Interaction Warning Banner */}
+            {hasAnyInteractionOnDate && (
+              <TouchableOpacity
+                style={[
+                  styles.interactionBanner,
+                  severeCount > 0 ? styles.severeBanner : styles.mildBanner,
+                ]}
+                onPress={() => {
+                  router.navigate("/(tabs)/MedicationsScreen");
+                  setTimeout(() => tabEvents.emit("openReactions"), 300);
+                }}
+              >
+                <Ionicons
+                  name={severeCount > 0 ? "warning" : "information-circle"}
+                  size={20}
+                  color={severeCount > 0 ? Colors.error : Colors.warning}
+                />
+                <View style={styles.bannerText}>
+                  <Text
+                    style={[
+                      styles.bannerTitle,
+                      {
+                        color: severeCount > 0 ? Colors.error : Colors.warning,
+                      },
+                    ]}
+                  >
+                    {severeCount > 0
+                      ? "Severe Interaction Detected"
+                      : "Mild Interaction Detected"}
+                  </Text>
+                  <Text style={styles.bannerSubtitle}>
+                    {severeCount > 0
+                      ? `${severeCount} severe interaction${severeCount > 1 ? "s" : ""} between your medications`
+                      : `${mildCount} mild interaction${mildCount > 1 ? "s" : ""} — check Reactions tab`}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={Colors.textTertiary}
+                />
+              </TouchableOpacity>
+            )}
+            {/* Selected Date Label */}
+            <View style={styles.selectedDateContainer}>
+              <Text style={styles.selectedDateTitle}>
+                {getDayLabel(selectedDate)}
+              </Text>
+              {isFuture(selectedDate) && (
+                <View style={styles.futureBadge}>
+                  <Text style={styles.futureBadgeText}>Upcoming</Text>
+                </View>
+              )}
+              {isPast(selectedDate) && (
+                <View style={styles.pastBadge}>
+                  <Text style={styles.pastBadgeText}>Past</Text>
+                </View>
+              )}
+            </View>
+            {/* Schedule List */}
+            {loadingInteractions && schedule.length === 0 ? (
+              <View style={styles.loadingCard}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.loadingText}>Checking interactions...</Text>
+              </View>
+            ) : schedule.length > 0 ? (
+              <View style={styles.medicationsCard}>
+                {schedule.map((item, index) => (
+                  <View
+                    key={item.reminderId + index}
+                    style={[
+                      styles.medicationItem,
+                      index === schedule.length - 1 &&
+                        styles.medicationItemLast,
+                      item.missed && styles.medicationItemMissed,
+                    ]}
+                  >
+                    <View style={styles.timeColumn}>
+                      <Text
+                        style={[
+                          styles.medTime,
+                          item.missed && styles.medTimeMissed,
+                        ]}
+                      >
+                        {formatTime12h(item.time)}
+                      </Text>
+                    </View>
+
+                    <View style={styles.medInfo}>
+                      <View style={styles.medNameRow}>
+                        <Text
+                          style={[
+                            styles.medName,
+                            item.missed && styles.medNameMissed,
+                          ]}
+                        >
+                          {item.name}
+                        </Text>
+                        {item.taken && (
+                          <View style={styles.takenBadge}>
+                            <Ionicons
+                              name="checkmark"
+                              size={12}
+                              color={Colors.success}
+                            />
+                            <Text style={styles.takenBadgeText}>Taken</Text>
+                            {item.actualTakenTime && (
+                              <Text
+                                style={[
+                                  styles.takenBadgeText,
+                                  { color: Colors.textSecondary },
+                                ]}
+                              >
+                                · {formatTime12h(item.actualTakenTime)}
+                              </Text>
+                            )}
+                            {item.takenVariance === "late" && (
+                              <Text
+                                style={[
+                                  styles.takenBadgeText,
+                                  { color: Colors.warning },
+                                ]}
+                              >
+                                · Late
+                              </Text>
+                            )}
+                            {item.takenVariance === "early" && (
+                              <Text
+                                style={[
+                                  styles.takenBadgeText,
+                                  { color: Colors.primary },
+                                ]}
+                              >
+                                · Early
+                              </Text>
+                            )}
+                          </View>
+                        )}
+                        {item.missed && (
+                          <View style={styles.missedBadge}>
+                            <Ionicons
+                              name="close"
+                              size={12}
+                              color={Colors.error}
+                            />
+                            <Text style={styles.missedBadgeText}>Missed</Text>
+                          </View>
+                        )}
+                        {item.missedSoft && (
+                          <View style={styles.missedBadge}>
+                            <Ionicons
+                              name="close"
+                              size={12}
+                              color={Colors.error}
+                            />
+                            <Text style={styles.missedBadgeText}>Missed</Text>
+                          </View>
+                        )}
+
+                        {item.late && !item.missedSoft && (
+                          <View style={styles.lateBadge}>
+                            <Ionicons
+                              name="time"
+                              size={12}
+                              color={Colors.warning}
+                            />
+                            <Text style={styles.lateBadgeText}>Late</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text
+                        style={[
+                          styles.medDosage,
+                          item.missed && styles.medDosageMissed,
+                        ]}
+                      >
+                        {`${item.dosageAmount ?? ""} ${item.dosageUnit ?? "mg"}`}
+                      </Text>
+                      {item.hasInteraction && (
+                        <View style={styles.tagRow}>
+                          <View
+                            style={[
+                              styles.interactionTag,
+                              item.interactionSeverity === "severe"
+                                ? styles.severeTag
+                                : styles.mildTag,
+                            ]}
+                          >
+                            <Ionicons
+                              name="warning"
+                              size={11}
+                              color={
+                                item.interactionSeverity === "severe"
+                                  ? Colors.error
+                                  : Colors.warning
+                              }
+                            />
+                            <Text
+                              style={[
+                                styles.tagText,
+                                {
+                                  color:
+                                    item.interactionSeverity === "severe"
+                                      ? Colors.error
+                                      : Colors.warning,
+                                },
+                              ]}
+                            >
+                              {item.interactionSeverity === "severe"
+                                ? "Severe"
+                                : "Mild"}{" "}
+                              interaction
+                              {item.interactionCount > 1
+                                ? ` (${item.interactionCount})`
+                                : ""}
+                            </Text>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+
+                    {canTakeOnSelectedDate &&
+                      (isTodaySelected || !item.taken) && (
+                        <TouchableOpacity
+                          style={[
+                            styles.takeButton,
+                            item.taken && styles.takenButton,
+                            !safeCan.markAsTaken() && styles.disabledButton,
+                          ]}
+                          onPress={() => toggleTaken(item)}
+                          disabled={!safeCan.markAsTaken()}
+                        >
+                          <Text
+                            style={[
+                              styles.takeButtonText,
+                              item.taken && styles.takenButtonText,
+                            ]}
+                          >
+                            {item.taken ? "✓" : "Take"}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    {isPast(selectedDate) &&
+                      (!isYesterdaySelected || item.taken) && (
+                        <View style={styles.pastTakenBadge}>
+                          <Ionicons
+                            name={
+                              item.taken ? "checkmark-circle" : "close-circle"
+                            }
+                            size={22}
+                            color={
+                              item.taken ? Colors.success : Colors.error + "80"
+                            }
+                          />
+                        </View>
+                      )}
+                    {isFuture(selectedDate) && (
+                      <View style={styles.futureIcon}>
+                        <Ionicons
+                          name="time-outline"
+                          size={20}
+                          color={Colors.textTertiary}
+                        />
+                      </View>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.noMedicationsCard}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={60}
+                  color={Colors.textTertiary}
+                />
+                <Text style={styles.noMedicationsText}>
+                  {isPast(selectedDate)
+                    ? "No medications were scheduled or taken on this day"
+                    : isFuture(selectedDate)
+                      ? "No medications scheduled for this day"
+                      : "No medications scheduled for today"}
+                </Text>
+                {canTakeOnSelectedDate && (
+                  <TouchableOpacity
+                    style={[
+                      styles.takeButton,
+                      { marginTop: 16, paddingHorizontal: 20 },
+                      !safeCan.markAsTaken() && styles.disabledButton,
+                    ]}
+                    onPress={() => openQuickTake()}
+                    disabled={!safeCan.markAsTaken()}
+                  >
+                    <Text style={styles.takeButtonText}>Log a dose</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {/* As Needed (Quick Take) Logs */}
+            {/* Quick-take dosage input */}
+
+            {/* <Text style={styles.sectionTitle}>Quick Actions</Text> */}
+
+            {/* <View style={styles.actionsContainer}>
             <TouchableOpacity
               style={styles.actionButton}
               onPress={async () => {
@@ -2103,110 +2167,113 @@ export default function HomeScreen() {
               <Text style={styles.actionText}>SOS</Text>
             </TouchableOpacity>
           </View> */}
-          {/* As Needed (Quick Take) Logs */}
-          {/* As Needed (Quick Take) Logs */}
-          {takenLogs.filter(
-            (l) =>
-              l.dateKey === dateKey(selectedDate) &&
-              l.reminderId === "quick-take",
-          ).length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>As Needed</Text>
-              <View style={styles.medicationsCard}>
-                {takenLogs
-                  .filter(
-                    (l) =>
-                      l.dateKey === dateKey(selectedDate) &&
-                      l.reminderId === "quick-take",
-                  )
-                  .map((log, index, arr) => (
-                    <View
-                      key={log.id}
-                      style={[
-                        styles.medicationItem,
-                        index === arr.length - 1 && styles.medicationItemLast,
-                      ]}
-                    >
-                      <View style={styles.timeColumn}>
-                        <Text style={styles.medTime}>
-                          {log.takenAt?.toDate
-                            ? formatTime12h(
-                                log.takenAt.toDate().toTimeString().slice(0, 5),
-                              )
-                            : "--"}
-                        </Text>
-                      </View>
-                      <View style={styles.medInfo}>
-                        <Text style={styles.medName}>{log.name}</Text>
-                        <Text style={styles.medDosage}>
-                          {(() => {
-                            const medication = medications.find(
-                              (m) => m.id === log.medicationId,
-                            );
-                            return medication
-                              ? getDosageDisplay(medication)
-                              : log.dosageAmount
-                                ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
-                                : log.dosageAmount != null
-                                  ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
-                                  : "—";
-                          })()}
-                        </Text>
-                      </View>
-                      <View style={styles.takenBadge}>
-                        <Ionicons
-                          name="checkmark"
-                          size={12}
-                          color={Colors.success}
-                        />
-                        <Text style={styles.takenBadgeText}>Taken</Text>
-                      </View>
-                      {/* Delete Button */}
-                      <TouchableOpacity
-                        style={styles.deleteButton}
-                        onPress={() => {
-                          Alert.alert(
-                            "Delete Log",
-                            "Remove this dose from your history?",
-                            [
-                              { text: "Cancel", style: "cancel" },
-                              {
-                                text: "Delete",
-                                style: "destructive",
-                                onPress: async () => {
-                                  const targetUserId =
-                                    userType === "caregiver"
-                                      ? selectedPatientId
-                                      : auth.currentUser?.uid;
-                                  if (targetUserId) {
-                                    await deleteDoc(
-                                      doc(
-                                        db,
-                                        "users",
-                                        targetUserId,
-                                        "taken_logs",
-                                        log.id,
-                                      ),
-                                    );
-                                  }
-                                },
-                              },
-                            ],
-                          );
-                        }}
+            {/* As Needed (Quick Take) Logs */}
+            {/* As Needed (Quick Take) Logs */}
+            {takenLogs.filter(
+              (l) =>
+                l.dateKey === dateKey(selectedDate) &&
+                l.reminderId === "quick-take",
+            ).length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>As Needed</Text>
+                <View style={styles.medicationsCard}>
+                  {takenLogs
+                    .filter(
+                      (l) =>
+                        l.dateKey === dateKey(selectedDate) &&
+                        l.reminderId === "quick-take",
+                    )
+                    .map((log, index, arr) => (
+                      <View
+                        key={log.id}
+                        style={[
+                          styles.medicationItem,
+                          index === arr.length - 1 && styles.medicationItemLast,
+                        ]}
                       >
-                        <Ionicons
-                          name="ellipsis-vertical"
-                          size={16}
-                          color={Colors.textTertiary}
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-              </View>
-            </>
-          )}
-          {/* <TouchableOpacity
+                        <View style={styles.timeColumn}>
+                          <Text style={styles.medTime}>
+                            {log.takenAt?.toDate
+                              ? formatTime12h(
+                                  log.takenAt
+                                    .toDate()
+                                    .toTimeString()
+                                    .slice(0, 5),
+                                )
+                              : "--"}
+                          </Text>
+                        </View>
+                        <View style={styles.medInfo}>
+                          <Text style={styles.medName}>{log.name}</Text>
+                          <Text style={styles.medDosage}>
+                            {(() => {
+                              const medication = medications.find(
+                                (m) => m.id === log.medicationId,
+                              );
+                              return medication
+                                ? getDosageDisplay(medication)
+                                : log.dosageAmount
+                                  ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
+                                  : log.dosageAmount != null
+                                    ? `${log.dosageAmount} ${log.dosageUnit || "mg"}`
+                                    : "—";
+                            })()}
+                          </Text>
+                        </View>
+                        <View style={styles.takenBadge}>
+                          <Ionicons
+                            name="checkmark"
+                            size={12}
+                            color={Colors.success}
+                          />
+                          <Text style={styles.takenBadgeText}>Taken</Text>
+                        </View>
+                        {/* Delete Button */}
+                        <TouchableOpacity
+                          style={styles.deleteButton}
+                          onPress={() => {
+                            Alert.alert(
+                              "Delete Log",
+                              "Remove this dose from your history?",
+                              [
+                                { text: "Cancel", style: "cancel" },
+                                {
+                                  text: "Delete",
+                                  style: "destructive",
+                                  onPress: async () => {
+                                    const targetUserId =
+                                      userType === "caregiver"
+                                        ? selectedPatientId
+                                        : auth.currentUser?.uid;
+                                    if (targetUserId) {
+                                      await deleteDoc(
+                                        doc(
+                                          db,
+                                          "users",
+                                          targetUserId,
+                                          "taken_logs",
+                                          log.id,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                },
+                              ],
+                            );
+                          }}
+                        >
+                          <Ionicons
+                            name="ellipsis-vertical"
+                            size={16}
+                            color={Colors.textTertiary}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                </View>
+              </>
+            )}
+            {/* <TouchableOpacity
             style={styles.testAlarmButton}
             onPress={async () => {
               // Test alarm that uses your custom sound and vibration
@@ -2234,217 +2301,233 @@ export default function HomeScreen() {
             <Ionicons name="alarm" size={16} color={Colors.primary} />
             <Text style={styles.testAlarmText}>Test Alarm</Text>
           </TouchableOpacity> */}
-          {/* Log a Dose chips */}
-          {canTakeOnSelectedDate &&
-            medications.filter((m) => m.active).length > 0 && (
-              <>
-                <Text style={styles.sectionTitle}>Log a Dose</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.quickTakeScroll}
-                >
-                  {medications
-                    .filter((m) => m.active)
-                    .map((med) => (
-                      <TouchableOpacity
-                        key={med.id}
-                        style={[
-                          styles.quickTakeChip,
-                          !safeCan.markAsTaken() && styles.disabledChip,
-                        ]}
-                        onPress={() =>
-                          safeCan.markAsTaken() && openQuickTake(med)
-                        }
-                        disabled={!safeCan.markAsTaken()}
-                      >
-                        <Ionicons
-                          name="medical"
-                          size={14}
-                          color={
-                            !safeCan.markAsTaken()
-                              ? Colors.textTertiary
-                              : Colors.primary
-                          }
-                        />
-                        <Text
-                          style={[
-                            styles.quickTakeChipText,
-                            !safeCan.markAsTaken() && {
-                              color: Colors.textTertiary,
-                            },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {med.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                </ScrollView>
-              </>
-            )}
-          <View style={{ height: 100 }} />
-        </View>
-      </ScrollView>
-
-      {/* Quick Take Modal */}
-      <Modal
-        animationType="slide"
-        transparent
-        visible={quickTakeVisible}
-        onRequestClose={closeQuickTake}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Log a Dose</Text>
-              <TouchableOpacity onPress={closeQuickTake}>
-                <Ionicons name="close" size={24} color={Colors.text} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Medication</Text>
-              <TextInput
-                style={styles.input}
-                value={quickTakeForm.name}
-                onChangeText={handleQuickTakeSearch}
-                placeholder="Search brand or generic name..."
-                placeholderTextColor={Colors.textTertiary}
-              />
-              {quickTakeShowSuggestions && (
-                <View style={[styles.suggestionsContainer, { maxHeight: 200 }]}>
-                  {quickTakeSearching ? (
-                    <View style={styles.suggestionLoading}>
-                      <ActivityIndicator size="small" color={Colors.primary} />
-                      <Text style={styles.suggestionLoadingText}>
-                        Searching...
-                      </Text>
-                    </View>
-                  ) : quickTakeSearch.length > 0 ? (
-                    <ScrollView
-                      scrollEnabled
-                      keyboardShouldPersistTaps="handled"
-                    >
-                      {quickTakeSearch.map((item) => (
+            {/* Log a Dose chips */}
+            {canTakeOnSelectedDate &&
+              medications.filter((m) => m.active).length > 0 && (
+                <>
+                  <Text style={styles.sectionTitle}>Log a Dose</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.quickTakeScroll}
+                  >
+                    {medications
+                      .filter((m) => m.active)
+                      .map((med) => (
                         <TouchableOpacity
-                          key={item.id}
-                          style={styles.suggestionItem}
-                          onPress={() => handleQuickTakeSelect(item)}
+                          key={med.id}
+                          style={[
+                            styles.quickTakeChip,
+                            !safeCan.markAsTaken() && styles.disabledChip,
+                          ]}
+                          onPress={() =>
+                            safeCan.markAsTaken() && openQuickTake(med)
+                          }
+                          disabled={!safeCan.markAsTaken()}
                         >
-                          <View style={styles.suggestionRow}>
-                            <View style={styles.suggestionTextContainer}>
-                              <Text style={styles.suggestionBrand}>
-                                {item.ph_brand}
-                              </Text>
-                              {!item.is_generic &&
-                                item.generic_name !== item.ph_brand && (
-                                  <Text style={styles.suggestionGeneric}>
-                                    {item.generic_name}
-                                  </Text>
-                                )}
-                            </View>
-                            <View
-                              style={[
-                                styles.suggestionTypeBadge,
-                                item.is_generic &&
-                                  styles.suggestionGenericBadge,
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.suggestionTypeText,
-                                  item.is_generic &&
-                                    styles.suggestionGenericTypeText,
-                                ]}
-                              >
-                                {item.is_generic ? "Generic" : "Brand"}
-                              </Text>
-                            </View>
-                          </View>
+                          <Ionicons
+                            name="medical"
+                            size={14}
+                            color={
+                              !safeCan.markAsTaken()
+                                ? Colors.textTertiary
+                                : Colors.primary
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.quickTakeChipText,
+                              !safeCan.markAsTaken() && {
+                                color: Colors.textTertiary,
+                              },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {med.name}
+                          </Text>
                         </TouchableOpacity>
                       ))}
-                    </ScrollView>
-                  ) : (
-                    <View style={styles.suggestionEmpty}>
-                      <Text style={styles.suggestionEmptyText}>
-                        No medicines found
-                      </Text>
+                  </ScrollView>
+                </>
+              )}
+            <View style={{ height: 100 }} />
+          </View>
+        </ScrollView>
+
+        {/* Quick Take Modal */}
+        <Modal
+          animationType="slide"
+          transparent
+          visible={quickTakeVisible}
+          onRequestClose={closeQuickTake}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={{ flex: 1 }}
+          >
+            <View style={styles.modalContainer}>
+              <View
+                style={[
+                  styles.modalContent,
+                  { paddingBottom: insets.bottom + 16 },
+                ]}
+              >
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Log a Dose</Text>
+                  <TouchableOpacity onPress={closeQuickTake}>
+                    <Ionicons name="close" size={24} color={Colors.text} />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Medication</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={quickTakeForm.name}
+                    onChangeText={handleQuickTakeSearch}
+                    placeholder="Search brand or generic name..."
+                    placeholderTextColor={Colors.textTertiary}
+                  />
+                  {quickTakeShowSuggestions && (
+                    <View
+                      style={[styles.suggestionsContainer, { maxHeight: 200 }]}
+                    >
+                      {quickTakeSearching ? (
+                        <View style={styles.suggestionLoading}>
+                          <ActivityIndicator
+                            size="small"
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.suggestionLoadingText}>
+                            Searching...
+                          </Text>
+                        </View>
+                      ) : quickTakeSearch.length > 0 ? (
+                        <ScrollView
+                          scrollEnabled
+                          keyboardShouldPersistTaps="handled"
+                        >
+                          {quickTakeSearch.map((item) => (
+                            <TouchableOpacity
+                              key={item.id}
+                              style={styles.suggestionItem}
+                              onPress={() => handleQuickTakeSelect(item)}
+                            >
+                              <View style={styles.suggestionRow}>
+                                <View style={styles.suggestionTextContainer}>
+                                  <Text style={styles.suggestionBrand}>
+                                    {item.ph_brand}
+                                  </Text>
+                                  {!item.is_generic &&
+                                    item.generic_name !== item.ph_brand && (
+                                      <Text style={styles.suggestionGeneric}>
+                                        {item.generic_name}
+                                      </Text>
+                                    )}
+                                </View>
+                                <View
+                                  style={[
+                                    styles.suggestionTypeBadge,
+                                    item.is_generic &&
+                                      styles.suggestionGenericBadge,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.suggestionTypeText,
+                                      item.is_generic &&
+                                        styles.suggestionGenericTypeText,
+                                    ]}
+                                  >
+                                    {item.is_generic ? "Generic" : "Brand"}
+                                  </Text>
+                                </View>
+                              </View>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.suggestionEmpty}>
+                          <Text style={styles.suggestionEmptyText}>
+                            No medicines found
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   )}
                 </View>
-              )}
-            </View>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Dosage</Text>
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Dosage</Text>
 
-              <View style={styles.formRow}>
-                {/* Amount Input */}
-                <TextInput
-                  style={[styles.input, { flex: 1, marginRight: 8 }]}
-                  value={quickTakeForm.dosageAmount?.toString()}
-                  onChangeText={(text) =>
-                    setQuickTakeForm({
-                      ...quickTakeForm,
-                      dosageAmount: parseInt(text) || 0,
-                    })
-                  }
-                  placeholder="Amount"
-                  placeholderTextColor={Colors.textTertiary}
-                  keyboardType="numeric"
-                />
+                  <View style={styles.formRow}>
+                    {/* Amount Input */}
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginRight: 8 }]}
+                      value={quickTakeForm.dosageAmount?.toString()}
+                      onChangeText={(text) =>
+                        setQuickTakeForm({
+                          ...quickTakeForm,
+                          dosageAmount: parseInt(text) || 0,
+                        })
+                      }
+                      placeholder="Amount"
+                      placeholderTextColor={Colors.textTertiary}
+                      keyboardType="numeric"
+                    />
 
-                {/* Unit Input */}
-                <TextInput
-                  style={[styles.input, styles.unitInput]}
-                  value={quickTakeForm.dosageUnit || "mg"}
-                  onChangeText={(text) => {
-                    const cleaned = text.replace(/[^a-zA-Z]/g, "");
-                    setQuickTakeForm({
-                      ...quickTakeForm,
-                      dosageUnit: cleaned || "mg",
-                    });
-                  }}
-                  placeholder="mg"
-                  placeholderTextColor={Colors.textTertiary}
-                  maxLength={5}
-                />
+                    {/* Unit Input */}
+                    <TextInput
+                      style={[styles.input, styles.unitInput]}
+                      value={quickTakeForm.dosageUnit || "mg"}
+                      onChangeText={(text) => {
+                        const cleaned = text.replace(/[^a-zA-Z]/g, "");
+                        setQuickTakeForm({
+                          ...quickTakeForm,
+                          dosageUnit: cleaned || "mg",
+                        });
+                      }}
+                      placeholder="mg"
+                      placeholderTextColor={Colors.textTertiary}
+                      maxLength={5}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Time taken</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={quickTakeForm.time}
+                    onChangeText={(t) =>
+                      setQuickTakeForm((p) => ({ ...p, time: t }))
+                    }
+                    placeholder="HH:MM"
+                    placeholderTextColor={Colors.textTertiary}
+                    keyboardType="numbers-and-punctuation"
+                  />
+                </View>
+
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={closeQuickTake}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.saveButton]}
+                    onPress={submitQuickTake}
+                  >
+                    <Text style={styles.saveButtonText}>Log Dose</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
-
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Time taken</Text>
-              <TextInput
-                style={styles.input}
-                value={quickTakeForm.time}
-                onChangeText={(t) =>
-                  setQuickTakeForm((p) => ({ ...p, time: t }))
-                }
-                placeholder="HH:MM"
-                placeholderTextColor={Colors.textTertiary}
-                keyboardType="numbers-and-punctuation"
-              />
-            </View>
-
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={closeQuickTake}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={submitQuickTake}
-              >
-                <Text style={styles.saveButtonText}>Log Dose</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
+          </KeyboardAvoidingView>
+        </Modal>
+      </SafeAreaView>
+    </View>
   );
 }
 // Styles

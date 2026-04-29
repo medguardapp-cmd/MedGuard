@@ -6,13 +6,13 @@ import { signOut } from "firebase/auth";
 import React from "react";
 import {
   Alert,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useOnboarding } from "../../contexts/OnboardingContext";
 import { useAuth } from "../../hooks/useAuth";
 import { auth } from "../../lib/firebase";
@@ -68,9 +68,6 @@ export default function MoreScreen() {
             <View style={styles.profileImage}>
               <Text style={styles.profileInitials}>{getUserInitials()}</Text>
             </View>
-            <TouchableOpacity style={styles.editProfileIcon}>
-              <Ionicons name="camera" size={20} color="#ffffff" />
-            </TouchableOpacity>
           </View>
 
           <Text style={styles.userName}>
@@ -262,7 +259,7 @@ const styles = StyleSheet.create({
   },
   profileSection: {
     alignItems: "center",
-    paddingTop: 100,
+    paddingTop: 50,
     paddingBottom: 24,
     backgroundColor: "white",
     borderBottomWidth: 1,
