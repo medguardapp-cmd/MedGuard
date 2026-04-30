@@ -1,31 +1,277 @@
+// app/_layout.tsx
+import { NotificationProvider } from "@/contexts/NotificationContext";
+import { SelectedPatientProvider } from "@/contexts/SelectedPatientContext";
+import * as Notifications from "expo-notifications";
+import { Slot, SplashScreen, useRouter, useSegments } from "expo-router";
+import { onAuthStateChanged } from "firebase/auth";
 import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
-} from "@react-navigation/native";
-import { Stack } from "expo-router";
-import { StatusBar } from "expo-status-bar";
-import "react-native-reanimated";
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, View } from "react-native";
 
-import { useColorScheme } from "@/hooks/use-color-scheme";
+import {
+  OnboardingProvider,
+  useOnboarding,
+} from "../contexts/OnboardingContext";
 
-export const unstable_settings = {
-  anchor: "(tabs)",
-};
+import { auth, db } from "../lib/firebase";
+import { registerForPushNotificationsAsync } from "../lib/notifications";
+
+import {
+  cancelMedicationAlarm,
+  getReminderLogIdWithTime,
+  handleNotificationResponse,
+  scheduleSnoozeAlarm,
+  setupNotificationCategories,
+} from "../services/reminderAlarmService";
+
+SplashScreen.preventAutoHideAsync();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true, // ✅ Add this
+    shouldShowList: true, // ✅ Add this
+  }),
+});
+
+interface ReminderDoc {
+  id: string;
+  medicationId: string;
+  medicationName: string;
+  medicationDosage: string;
+  [key: string]: any;
+}
+
+function RootLayoutNav() {
+  const router = useRouter();
+  const segments = useSegments();
+  const { isCompleted, isLoading: onboardingLoading, data } = useOnboarding();
+
+  const [isReady, setIsReady] = useState(false);
+
+  const notificationListenerSetup = useRef(false);
+  const authUnsubscribeRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (notificationListenerSetup.current) return;
+    notificationListenerSetup.current = true;
+
+    const setupNotifications = async () => {
+      await registerForPushNotificationsAsync();
+      await setupNotificationCategories();
+    };
+
+    setupNotifications();
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      async (response) => {
+        const notificationData =
+          response.notification.request.content.data ?? {};
+        const { reminderId, medicationName, dosage } = notificationData;
+
+        await handleNotificationResponse(
+          response,
+
+          // MARK AS TAKEN
+          async (callbackReminderId: string) => {
+            const userId = auth.currentUser?.uid;
+            if (!userId || !callbackReminderId) return;
+
+            const currentDateKey = new Date().toDateString();
+
+            try {
+              const remindersSnap = await getDocs(
+                collection(db, "users", userId, "reminders"),
+              );
+
+              const reminder = remindersSnap.docs
+                .map((d) => ({ id: d.id, ...d.data() }) as ReminderDoc)
+                .find(
+                  (r) =>
+                    r.id === callbackReminderId ||
+                    r.id === callbackReminderId.split("_")[0],
+                );
+
+              if (!reminder) {
+                console.warn("Reminder not found for id:", callbackReminderId);
+                return;
+              }
+
+              const scheduledTime = notificationData.time || "08:00";
+              const reminderName =
+                medicationName || reminder.medicationName || "Medication";
+              const reminderDosage = dosage || reminder.medicationDosage || "";
+              const reminderMedicationId = reminder.medicationId;
+
+              // Save to taken_logs
+              await addDoc(collection(db, "users", userId, "taken_logs"), {
+                medicationId: reminderMedicationId,
+                reminderId: callbackReminderId,
+                name: reminderName,
+                dosage: reminderDosage,
+                takenAt: serverTimestamp(),
+                dateKey: currentDateKey,
+              });
+
+              // Save to reminder_status_logs
+              const statusLogId = getReminderLogIdWithTime(
+                callbackReminderId,
+                scheduledTime,
+                currentDateKey,
+              );
+
+              await setDoc(
+                doc(db, "users", userId, "reminder_status_logs", statusLogId),
+                {
+                  reminderId: callbackReminderId,
+                  medicationId: reminderMedicationId,
+                  name: reminderName,
+                  dosage: reminderDosage,
+                  scheduledTime: scheduledTime,
+                  dateKey: currentDateKey,
+                  status: "taken",
+                  takenAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                },
+              );
+
+              // Cancel the alarm
+              await cancelMedicationAlarm(callbackReminderId);
+
+              console.log(
+                "✅ Medication marked as taken from notification:",
+                reminderName,
+              );
+            } catch (error) {
+              console.error("Error marking as taken:", error);
+            }
+          },
+
+          // SNOOZE
+          async (snoozeReminderId: string) => {
+            await scheduleSnoozeAlarm(
+              snoozeReminderId,
+              medicationName || "Medication",
+              dosage || "",
+              10,
+            );
+          },
+
+          // SKIP
+          async (skipReminderId: string) => {
+            await cancelMedicationAlarm(skipReminderId);
+          },
+        );
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    authUnsubscribeRef.current = onAuthStateChanged(auth, async (user) => {
+      await new Promise((r) => setTimeout(r, 300));
+
+      const currentRoute = segments[0];
+
+      if (user) {
+        if (user.emailVerified) {
+          if (onboardingLoading) return;
+
+          const userType = data?.userData?.userType || "patient";
+
+          let hasPatients = true;
+
+          if (userType === "caregiver") {
+            try {
+              const q = query(
+                collection(db, "caregiver_connections"),
+                where("caregiverId", "==", user.uid),
+                where("status", "==", "approved"),
+              );
+
+              const snapshot = await getDocs(q);
+              hasPatients = snapshot.docs.length > 0;
+            } catch {
+              hasPatients = false;
+            }
+          }
+
+          const outsideTabRoutes = [
+            "patient-info",
+            "edit-profile",
+            "caregiver",
+            "notifications",
+            "medication-logs",
+          ];
+
+          const isOutside = outsideTabRoutes.includes(currentRoute);
+
+          if (isCompleted) {
+            if (userType === "caregiver" && !hasPatients) {
+              if (currentRoute !== "(caregiver-only)") {
+                router.replace("/(caregiver-only)/connect");
+              }
+            } else {
+              if (!isOutside && currentRoute !== "(tabs)") {
+                router.replace("/(tabs)");
+              }
+            }
+          } else {
+            if (currentRoute !== "(onboarding)") {
+              router.replace("/(onboarding)/stepper");
+            }
+          }
+        } else {
+          if (currentRoute !== "(auth)") {
+            router.replace("/(auth)/verify-email");
+          }
+        }
+      } else {
+        if (currentRoute !== "(auth)") {
+          router.replace("/(auth)/onboarding");
+        }
+      }
+
+      setIsReady(true);
+      SplashScreen.hideAsync();
+    });
+
+    return () => authUnsubscribeRef.current?.();
+  }, [isCompleted, onboardingLoading, data?.userData?.userType, segments]);
+
+  if (!isReady || onboardingLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+      </View>
+    );
+  }
+
+  return <Slot />;
+}
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="modal"
-          options={{ presentation: "modal", title: "Modal" }}
-        />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <OnboardingProvider>
+      <NotificationProvider>
+        <SelectedPatientProvider>
+          <RootLayoutNav />
+        </SelectedPatientProvider>
+      </NotificationProvider>
+    </OnboardingProvider>
   );
 }
