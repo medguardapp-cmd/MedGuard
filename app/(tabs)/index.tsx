@@ -60,6 +60,12 @@ import {
   checkMissedAndLateDoses,
   checkSevereInteractions,
 } from "../../services/notificationService";
+
+import {
+  cancelMedicationAlarm,
+  scheduleMedicationAlarm,
+} from "../../services/reminderAlarmService";
+
 const originalConsoleLog = console.log;
 console.log = (...args) => {
   // Skip the markAsTaken check logs
@@ -2024,151 +2030,7 @@ export default function HomeScreen() {
                 )}
               </View>
             )}
-            {/* As Needed (Quick Take) Logs */}
-            {/* Quick-take dosage input */}
 
-            {/* <Text style={styles.sectionTitle}>Quick Actions</Text> */}
-
-            {/* <View style={styles.actionsContainer}>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={async () => {
-                try {
-                  // Request permissions
-                  const { status } = await Notifications.getPermissionsAsync();
-                  if (status !== "granted") {
-                    await Notifications.requestPermissionsAsync();
-                  }
-
-                  // Test 1: Immediate notification
-                  await Notifications.scheduleNotificationAsync({
-                    content: {
-                      title: "🔔 Test Notification",
-                      body: "This is an immediate test notification!",
-                      sound: "default",
-                    },
-                    trigger: null, // null is fine for immediate
-                  });
-
-                  // Test 2: 5-second delayed alarm
-                  await Notifications.scheduleNotificationAsync({
-                    content: {
-                      title: "⏰ Test Alarm",
-                      body: "This is your test medication reminder!",
-                      sound: "default",
-                      priority: Notifications.AndroidNotificationPriority.HIGH,
-                    },
-                    trigger: {
-                      seconds: 5, // Use seconds instead of date
-                      channelId: "medication-alarms",
-                    },
-                  });
-
-                  Alert.alert(
-                    "✅ Test Sent",
-                    "Check your notifications!\n\n• Immediate notification should appear now\n• Alarm notification in 5 seconds",
-                  );
-                } catch (error) {
-                  console.error("Test error:", error);
-                  Alert.alert("❌ Error", error.message);
-                }
-              }}
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.primary }]}
-              >
-                <Ionicons
-                  name="alarm-outline"
-                  size={28}
-                  color={Colors.surface}
-                />
-              </View>
-              <Text style={styles.actionText}>Test Alarm</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => {
-                router.navigate("/(tabs)/MedicationsScreen");
-                setTimeout(() => tabEvents.emit("openLogReaction"), 300);
-              }}
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.warning }]}
-              >
-                <Ionicons name="clipboard" size={28} color={Colors.surface} />
-              </View>
-              <Text style={styles.actionText}>Log Reaction</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => {
-                router.navigate("/(tabs)/MedicationsScreen");
-                setTimeout(() => tabEvents.emit("openAddMedication"), 300);
-              }}
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.success }]}
-              >
-                <Ionicons name="add-circle" size={28} color={Colors.surface} />
-              </View>
-              <Text style={styles.actionText}>Add Med</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => {
-                router.navigate("/(tabs)/MedicationsScreen");
-                setTimeout(() => tabEvents.emit("openLogReaction"), 300);
-              }}
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.warning }]}
-              >
-                <Ionicons name="clipboard" size={28} color={Colors.surface} />
-              </View>
-              <Text style={styles.actionText}>Log Reaction</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => {
-                router.navigate("/(tabs)/MedicationsScreen");
-                setTimeout(() => tabEvents.emit("openAddReminder"), 300);
-              }}
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.primary }]}
-              >
-                <Ionicons name="alarm" size={28} color={Colors.surface} />
-              </View>
-              <Text style={styles.actionText}>Add Reminder</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() =>
-                Alert.alert(
-                  "🚨 Emergency",
-                  "If this is a medical emergency, call emergency services immediately.\n\nEmergency: 911\nPoison Control: 1-800-222-1222",
-                  [{ text: "OK" }],
-                )
-              }
-            >
-              <View
-                style={[styles.actionIcon, { backgroundColor: Colors.error }]}
-              >
-                <Ionicons
-                  name="alert-circle"
-                  size={28}
-                  color={Colors.surface}
-                />
-              </View>
-              <Text style={styles.actionText}>SOS</Text>
-            </TouchableOpacity>
-          </View> */}
-            {/* As Needed (Quick Take) Logs */}
-            {/* As Needed (Quick Take) Logs */}
             {takenLogs.filter(
               (l) =>
                 l.dateKey === dateKey(selectedDate) &&
@@ -2273,34 +2135,86 @@ export default function HomeScreen() {
                 </View>
               </>
             )}
-            {/* <TouchableOpacity
-            style={styles.testAlarmButton}
-            onPress={async () => {
-              // Test alarm that uses your custom sound and vibration
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title: "🔔 Test Alarm",
-                  body: "Testing alarm sound and vibration!",
-                  sound: "alarm.mp3", // ✅ Your custom alarm
-                  priority: Notifications.AndroidNotificationPriority.MAX,
-                  categoryIdentifier: "medication_action",
-                },
-                trigger: {
-                  type: Notifications.SchedulableTriggerInputTypes
-                    .TIME_INTERVAL,
-                  seconds: 3,
-                },
-              });
+            {/* TEST ALARM BUTTON - Enhanced with Logging */}
+            <TouchableOpacity
+              style={styles.testAlarmButton}
+              onPress={async () => {
+                try {
+                  const targetUserId =
+                    userType === "caregiver"
+                      ? selectedPatientId
+                      : auth.currentUser?.uid;
 
-              Alert.alert(
-                "Alarm Test",
-                "Alarm will fire in 3 seconds with custom sound and vibration",
-              );
-            }}
-          >
-            <Ionicons name="alarm" size={16} color={Colors.primary} />
-            <Text style={styles.testAlarmText}>Test Alarm</Text>
-          </TouchableOpacity> */}
+                  if (!targetUserId) {
+                    Alert.alert("Error", "No user selected");
+                    return;
+                  }
+
+                  console.log("=== TEST ALARM START ===");
+                  console.log("Target User ID:", targetUserId);
+
+                  // Cancel any existing test alarms
+                  console.log("Cancelling existing test alarms...");
+                  await cancelMedicationAlarm(`${targetUserId}_test_alarm`);
+
+                  // Replace your test button scheduling with this:
+                  const now = new Date();
+                  const testTime = new Date(now.getTime() + 2 * 60 * 1000); // 2 minutes from now
+                  const hour = testTime.getHours();
+                  const minute = testTime.getMinutes();
+                  const timeString = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+
+                  console.log(
+                    `⏰ Scheduling for ${timeString} — wait 2 minutes`,
+                  );
+
+                  const testReminderId = `${targetUserId}_test_alarm_${Date.now()}`;
+
+                  console.log(
+                    `📱 Scheduling test alarm at ${hour}:${minute} (${timeString})`,
+                  );
+                  console.log(`Current time: ${now.toLocaleTimeString()}`);
+                  console.log(
+                    `Alarm will fire at: ${testTime.toLocaleTimeString()}`,
+                  );
+                  console.log(`Reminder ID: ${testReminderId}`);
+
+                  // Call scheduleMedicationAlarm
+                  await scheduleMedicationAlarm(
+                    testReminderId,
+                    "🧪 TEST MEDICATION",
+                    "500mg",
+                    [timeString],
+                    [], // Empty array = one-time alarm
+                  );
+
+                  console.log(
+                    "✅ scheduleMedicationAlarm completed successfully",
+                  );
+                  console.log("=== TEST ALARM END ===");
+
+                  Alert.alert(
+                    "✅ Test Alarm Scheduled",
+                    `Alarm scheduled for ${timeString} (in 15 seconds)\n\n` +
+                      `Check the console for details.\n\n` +
+                      `⚠️ Keep app open and screen on!`,
+                    [{ text: "OK" }],
+                  );
+                } catch (error: any) {
+                  console.error("❌ Test alarm error:", error);
+                  Alert.alert(
+                    "❌ Error",
+                    error.message || "Failed to schedule test alarm",
+                  );
+                }
+              }}
+            >
+              <Ionicons name="alarm" size={16} color={Colors.error} />
+              <Text style={[styles.testAlarmText, { color: Colors.error }]}>
+                🔔 Test Alarm (15s)
+              </Text>
+            </TouchableOpacity>
+
             {/* Log a Dose chips */}
             {canTakeOnSelectedDate &&
               medications.filter((m) => m.active).length > 0 && (

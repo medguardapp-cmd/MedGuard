@@ -49,7 +49,6 @@ import { MedicationsTab } from "./MedicationsTab";
 import { ReactionsTab } from "./ReactionsTab";
 import { RemindersTab } from "./RemindersTab";
 
-
 // Types
 interface Medication {
   id: string;
@@ -510,16 +509,16 @@ export default function MedicationsScreen() {
   useEffect(() => {
     const userId = auth.currentUser?.uid;
     if (!userId || reminders.length === 0) return;
-  
+
     const needsMigration = reminders.filter((r) => !r.createdAt);
     if (needsMigration.length === 0) return; // ← stop if nothing to migrate
-  
+
     const batch: Promise<void>[] = needsMigration.map((r) =>
       updateDoc(doc(db, "users", userId, "reminders", r.id), {
         createdAt: serverTimestamp(),
       }).catch(console.warn),
     );
-  
+
     Promise.all(batch).catch(console.warn);
   }, [reminders]);
   // Auto-select first patient for caregivers
@@ -571,11 +570,11 @@ export default function MedicationsScreen() {
       const targetUserId =
         userType === "caregiver" ? selectedPatientId : user?.uid;
       if (!targetUserId) return;
-  
+
       for (const reminder of reminders) {
         if (!reminder.enabled) continue;
         if (disabledRemindersRef.current.has(reminder.id)) continue; // ← skip already processed
-  
+
         if (!isReminderActive(reminder)) {
           disabledRemindersRef.current.add(reminder.id); // ← mark before writing
           await updateDoc(
@@ -586,7 +585,7 @@ export default function MedicationsScreen() {
         }
       }
     };
-  
+
     checkExpiredReminders();
   }, [reminders, medications, takenLogs]);
 
@@ -683,8 +682,9 @@ export default function MedicationsScreen() {
       return;
     }
 
-    const userId = user?.uid;
-    if (!userId) return;
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     if (!editingMedication && medicationForm.drug_id) {
       const existingDrugIds = medications
@@ -774,8 +774,10 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteMedication = async (id: string) => {
-    const userId = user?.uid;
-    if (!userId) return;
+    // ✅ Define here so it's accessible inside the Alert callback
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : user?.uid;
+    if (!targetUserId) return;
 
     Alert.alert(
       "Delete Medication",
@@ -786,14 +788,21 @@ export default function MedicationsScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            await deleteDoc(doc(db, "users", userId, "medications", id));
             const remindersToDelete = reminders.filter(
               (r) => r.medicationId === id,
             );
+
+            // ✅ Cancel native alarms before deleting
+            for (const r of remindersToDelete) {
+              await cancelMedicationAlarm(`${targetUserId}_${r.id}`);
+            }
+
+            await deleteDoc(doc(db, "users", targetUserId, "medications", id));
+
             if (remindersToDelete.length > 0) {
               const batch = writeBatch(db);
               remindersToDelete.forEach((r) =>
-                batch.delete(doc(db, "users", userId, "reminders", r.id)),
+                batch.delete(doc(db, "users", targetUserId, "reminders", r.id)),
               );
               await batch.commit();
             }
@@ -1212,8 +1221,8 @@ export default function MedicationsScreen() {
             onAddReminder={() => setReminderModalVisible(true)}
             onEditMedication={(med) => {
               setEditingMedication(med as Medication);
-  setMedicationForm(med as Medication);
-  setMedicationModalVisible(true);
+              setMedicationForm(med as Medication);
+              setMedicationModalVisible(true);
             }}
             onDeleteMedication={handleDeleteMedication}
             isCaregiver={isCaregiver}
