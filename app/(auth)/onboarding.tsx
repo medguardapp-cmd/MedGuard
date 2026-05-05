@@ -2,21 +2,26 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
 export default function OnboardingScreen() {
   const router = useRouter();
 
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient
-        colors={["#3b82f6", "#1d4ed8", "#1e40af"]}
+        colors={["#668cc9", "#2b52bd", "#122975"]}
         style={styles.gradient}
       >
         <View style={styles.content}>
           <View style={styles.logoContainer}>
             <View style={styles.logoWrapper}>
-              <Text style={styles.logoIcon}>🛡️</Text>
+              <Image
+                source={require("../../assets/images/medguard.png")}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
             </View>
             <Text style={styles.appName}>MedGuard</Text>
             <Text style={styles.tagline}>
@@ -126,7 +131,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   primaryButtonText: {
-    color: "#3b82f6",
+    color: "#122975",
     fontSize: 13,
     fontWeight: "600",
   },
@@ -140,5 +145,9 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: "white",
     fontSize: 13,
+  },
+  logoImage: {
+    width: 80,
+    height: 80,
   },
 });

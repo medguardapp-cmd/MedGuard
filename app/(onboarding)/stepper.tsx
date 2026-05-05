@@ -6,7 +6,6 @@ import React, { useState } from "react";
 import {
   Alert,
   Modal,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useOnboarding } from "../../contexts/OnboardingContext";
 
 // Add this right after imports, before export default function
@@ -793,7 +793,7 @@ export default function OnboardingStepper() {
 
           {/* Drug Allergies (must-have for reactions feature) */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Drug Allergies ⚠️</Text>
+            <Text style={styles.sectionTitle}>Drug Allergies </Text>
             <Text style={styles.sectionDescription}>
               List any medication allergies (important for medication safety)
             </Text>
@@ -1438,17 +1438,17 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e2e8f0",
   },
   title: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: "bold",
     color: "#0f172a",
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#64748b",
     marginBottom: 20,
   },
-  progressContainer: { marginTop: 8 },
+  progressContainer: { marginTop: 5 },
   progressBar: {
     height: 6,
     backgroundColor: "#e2e8f0",
@@ -1457,34 +1457,35 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     borderRadius: 3,
   },
   stepContent: {
     flex: 1,
     padding: 24,
+    paddingTop: 16,
   },
   stepTitle: {
-    fontSize: 24,
+    fontSize: 16,
     fontWeight: "bold",
     color: "#0f172a",
     marginBottom: 8,
   },
   stepDescription: {
-    fontSize: 16,
+    fontSize: 13,
     color: "#64748b",
-    marginBottom: 32,
+    marginBottom: 20,
   },
-  optionsContainer: { gap: 16, marginBottom: 32 },
+  optionsContainer: { gap: 16, marginBottom: 20 },
   optionCard: {
     backgroundColor: "white",
-    padding: 24,
+    padding: 20,
     borderRadius: 16,
     borderWidth: 2,
     borderColor: "#e2e8f0",
   },
   selectedCard: {
-    borderColor: "#3b82f6",
+    borderColor: "#4A70A9",
     backgroundColor: "#eff6ff",
   },
   disabledCard: { opacity: 0.6 },
@@ -1493,14 +1494,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  optionIcon: { fontSize: 32, marginRight: 16 },
+  optionIcon: { fontSize: 20, marginRight: 16 },
   optionTitle: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "600",
     color: "#0f172a",
   },
   optionDescription: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#64748b",
     lineHeight: 20,
   },
@@ -1522,25 +1523,26 @@ const styles = StyleSheet.create({
   infoBox: {
     backgroundColor: "#f0f9ff",
     padding: 20,
+    paddingTop: 15,
     borderRadius: 12,
     borderLeftWidth: 4,
     borderLeftColor: "#0ea5e9",
   },
   infoTitle: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#0369a1",
     marginBottom: 8,
   },
   infoText: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#0c4a6e",
     lineHeight: 20,
   },
   form: { gap: 24 },
   inputGroup: { gap: 8 },
   label: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#374151",
   },
@@ -1549,8 +1551,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#d1d5db",
     borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
+    padding: 15,
+    fontSize: 13,
     color: "#0f172a",
   },
   textArea: { height: 100, textAlignVertical: "top" },
@@ -1575,7 +1577,7 @@ const styles = StyleSheet.create({
     borderColor: "#d1d5db",
   },
   countryCodeText: {
-    fontSize: 16,
+    fontSize: 13,
     color: "#374151",
     fontWeight: "500",
   },
@@ -1600,12 +1602,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   genderSelected: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   genderText: {
-    fontSize: 16,
-    fontWeight: "500",
+    fontSize: 13,
+    fontWeight: "400",
     color: "#374151",
   },
   genderTextSelected: { color: "white" },
@@ -1616,7 +1618,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "bold",
     color: "#0f172a",
     marginBottom: 8,
@@ -1635,20 +1637,20 @@ const styles = StyleSheet.create({
     borderLeftColor: "#f59e0b",
   },
   noteText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#92400e",
     lineHeight: 20,
   },
   inputWithButton: { flexDirection: "row", gap: 8 },
   flexInput: { flex: 1 },
   addButton: {
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 12,
     justifyContent: "center",
   },
-  addButtonText: { color: "white", fontWeight: "600", fontSize: 14 },
+  addButtonText: { color: "white", fontWeight: "600", fontSize: 13 },
   listContainer: { marginTop: 12, gap: 8 },
   listItem: {
     flexDirection: "row",
@@ -1675,6 +1677,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+    paddingTop: 8,
   },
   bloodTypeOption: {
     paddingHorizontal: 12,
@@ -1685,11 +1688,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   bloodTypeSelected: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   bloodTypeText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#374151",
     fontWeight: "500",
   },
@@ -1700,9 +1703,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderLeftWidth: 4,
     borderLeftColor: "#10b981",
+    marginBottom: 50,
   },
   privacyText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#065f46",
     lineHeight: 20,
   },
@@ -1806,28 +1810,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   backButtonText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#374151",
   },
 
   skipButton: {
     flex: 1,
-    padding: 16,
+    padding: 14,
     borderWidth: 1,
     borderColor: "#d1d5db",
     borderRadius: 12,
     alignItems: "center",
   },
   skipButtonText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "#6b7280",
   },
   nextButton: {
     flex: 1,
     padding: 16,
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     borderRadius: 12,
     alignItems: "center",
   },
@@ -1836,14 +1840,14 @@ const styles = StyleSheet.create({
     flex: 2, // Make it wider when skip button is visible
   },
   nextButtonText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
     color: "white",
   },
   fullWidthNextButton: {
     width: "100%",
     padding: 16,
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     borderRadius: 12,
     alignItems: "center",
   },
@@ -1860,7 +1864,7 @@ const styles = StyleSheet.create({
   halfWidthNextButton: {
     flex: 1,
     padding: 16,
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     borderRadius: 12,
     alignItems: "center",
     minHeight: 56,
@@ -1894,7 +1898,7 @@ const styles = StyleSheet.create({
   thirdWidthNextButton: {
     flex: 1,
     padding: 12,
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     borderRadius: 12,
     alignItems: "center",
     minHeight: 52,
@@ -1914,7 +1918,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "600",
     color: "#0f172a",
     marginBottom: 16,
@@ -1927,7 +1931,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e2e8f0",
   },
   modalOptionText: {
-    fontSize: 16,
+    fontSize: 13,
     color: "#0f172a",
     textAlign: "center",
   },
@@ -1959,7 +1963,7 @@ const styles = StyleSheet.create({
     minHeight: 50,
   },
   dropdownButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#0f172a",
   },
   dropdownArrow: {
@@ -1980,13 +1984,13 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   medicalSectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "700",
     color: "#0f172a",
     marginBottom: 4,
   },
   medicalSectionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#64748b",
     marginBottom: 16,
     lineHeight: 20,
@@ -2015,7 +2019,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tagText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#334155",
   },
   tagRemove: {
@@ -2034,11 +2038,11 @@ const styles = StyleSheet.create({
     borderColor: "#e2e8f0",
     borderRadius: 12,
     padding: 12,
-    fontSize: 15,
+    fontSize: 13,
     color: "#0f172a",
   },
   addActionButton: {
-    backgroundColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
     paddingHorizontal: 18,
     paddingVertical: 12,
     borderRadius: 12,
@@ -2047,7 +2051,7 @@ const styles = StyleSheet.create({
   addActionButtonText: {
     color: "white",
     fontWeight: "600",
-    fontSize: 14,
+    fontSize: 13,
   },
   warningCard: {
     backgroundColor: "#fef2f2",
@@ -2067,7 +2071,7 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 8,
     borderLeftWidth: 3,
-    borderLeftColor: "#3b82f6",
+    borderLeftColor: "#4A70A9",
   },
   infoCardText: {
     fontSize: 13,
@@ -2093,11 +2097,11 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
   },
   toggleButtonActive: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   toggleButtonText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "500",
     color: "#64748b",
   },
@@ -2119,8 +2123,8 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
   },
   pickerGridOptionActive: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   pickerGridText: {
     fontSize: 13,
@@ -2172,8 +2176,8 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
   },
   bloodTypeGridOptionActive: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   bloodTypeGridText: {
     fontSize: 13,
@@ -2205,11 +2209,11 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
   },
   optionChipActive: {
-    backgroundColor: "#3b82f6",
-    borderColor: "#3b82f6",
+    backgroundColor: "#4A70A9",
+    borderColor: "#4A70A9",
   },
   optionChipText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#374151",
     fontWeight: "500",
   },
@@ -2221,7 +2225,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     borderRadius: 12,
     padding: 12,
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.text,
     marginTop: 8,
   },
@@ -2244,7 +2248,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
   },
   toggleText: {
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.text,
     fontWeight: "500",
   },

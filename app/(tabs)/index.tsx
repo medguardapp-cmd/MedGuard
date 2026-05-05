@@ -61,10 +61,6 @@ import {
   checkSevereInteractions,
 } from "../../services/notificationService";
 
-import {
-  cancelMedicationAlarm,
-  scheduleMedicationAlarm,
-} from "../../services/reminderAlarmService";
 
 const originalConsoleLog = console.log;
 console.log = (...args) => {
@@ -2136,7 +2132,7 @@ export default function HomeScreen() {
               </>
             )}
             {/* TEST ALARM BUTTON - Enhanced with Logging */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.testAlarmButton}
               onPress={async () => {
                 try {
@@ -2213,7 +2209,7 @@ export default function HomeScreen() {
               <Text style={[styles.testAlarmText, { color: Colors.error }]}>
                 🔔 Test Alarm (15s)
               </Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             {/* Log a Dose chips */}
             {canTakeOnSelectedDate &&

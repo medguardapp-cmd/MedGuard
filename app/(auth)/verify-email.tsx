@@ -4,7 +4,6 @@ import { sendEmailVerification } from "firebase/auth";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -59,12 +58,12 @@ const bannerStyles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
+    padding: 12,
+    marginBottom: 12,
     gap: 10,
   },
-  icon: { fontSize: 15, fontWeight: "700" },
-  text: { flex: 1, fontSize: 13, fontWeight: "500", lineHeight: 18 },
+  icon: { fontSize: 14, fontWeight: "700" },
+  text: { flex: 1, fontSize: 12, fontWeight: "500", lineHeight: 16 },
   dismiss: { fontSize: 13, fontWeight: "700" },
 });
 
@@ -142,7 +141,6 @@ export default function VerifyEmailScreen() {
     setChecking(true);
     setBanner(null);
     try {
-      // Force reload the user to get the latest emailVerified status
       await auth.currentUser.reload();
       const refreshed = auth.currentUser;
 
@@ -173,10 +171,7 @@ export default function VerifyEmailScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
+      <View style={styles.content}>
         {/* Illustration */}
         <View style={styles.illustrationContainer}>
           <View style={styles.outerRing}>
@@ -184,7 +179,6 @@ export default function VerifyEmailScreen() {
               <Text style={styles.illustrationIcon}>✉️</Text>
             </View>
           </View>
-          {/* Decorative dots */}
           <View style={[styles.dot, styles.dotTopLeft]} />
           <View style={[styles.dot, styles.dotTopRight]} />
           <View style={[styles.dot, styles.dotBottomLeft]} />
@@ -209,15 +203,13 @@ export default function VerifyEmailScreen() {
         )}
 
         {/* Banner */}
-        <View style={styles.bannerArea}>
-          {banner && (
-            <Banner
-              type={banner.type}
-              message={banner.message}
-              onDismiss={() => setBanner(null)}
-            />
-          )}
-        </View>
+        {banner && (
+          <Banner
+            type={banner.type}
+            message={banner.message}
+            onDismiss={() => setBanner(null)}
+          />
+        )}
 
         {/* Steps */}
         <View style={styles.stepsCard}>
@@ -263,7 +255,7 @@ export default function VerifyEmailScreen() {
           activeOpacity={0.85}
         >
           {loading ? (
-            <ActivityIndicator color="#2563eb" size="small" />
+            <ActivityIndicator color="#4A70A9" size="small" />
           ) : (
             <Text style={styles.resendButtonText}>
               {cooldown > 0
@@ -280,150 +272,146 @@ export default function VerifyEmailScreen() {
         >
           <Text style={styles.backLinkText}>← Back to Login</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 24,
-    paddingBottom: 48,
+  content: {
+    flex: 1,
+    padding: 20,
+    justifyContent: "center",
     alignItems: "center",
   },
 
   // Illustration
   illustrationContainer: {
-    width: 160,
-    height: 160,
+    width: 120,
+    height: 120,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 24,
-    marginBottom: 32,
+    marginBottom: 20,
   },
   outerRing: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     backgroundColor: "#eff6ff",
     justifyContent: "center",
     alignItems: "center",
   },
   innerRing: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: "#dbeafe",
     justifyContent: "center",
     alignItems: "center",
   },
-  illustrationIcon: { fontSize: 44 },
+  illustrationIcon: { fontSize: 34 },
   dot: {
     position: "absolute",
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: "#bfdbfe",
   },
-  dotTopLeft: { top: 12, left: 10 },
+  dotTopLeft: { top: 10, left: 8 },
   dotTopRight: {
-    top: 20,
-    right: 8,
-    width: 7,
-    height: 7,
+    top: 16,
+    right: 6,
+    width: 6,
+    height: 6,
     backgroundColor: "#93c5fd",
   },
   dotBottomLeft: {
-    bottom: 16,
-    left: 20,
-    width: 6,
-    height: 6,
+    bottom: 12,
+    left: 16,
+    width: 5,
+    height: 5,
     backgroundColor: "#60a5fa",
   },
 
   // Text
   title: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: "700",
     color: "#111827",
     textAlign: "center",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 14,
     color: "#6b7280",
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: 8,
   },
 
   // Email pill
   emailPill: {
     backgroundColor: "#eff6ff",
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginBottom: 8,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginBottom: 4,
     maxWidth: "90%",
   },
   emailText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "700",
-    color: "#2563eb",
+    color: "#4A70A9",
     textAlign: "center",
   },
-  sentTime: { fontSize: 12, color: "#9ca3af", marginBottom: 4 },
-
-  // Banner
-  bannerArea: { width: "100%", marginTop: 8 },
+  sentTime: { fontSize: 11, color: "#9ca3af", marginBottom: 8 },
 
   // Steps card
   stepsCard: {
     width: "100%",
     backgroundColor: "#f9fafb",
-    borderRadius: 16,
-    padding: 20,
-    marginTop: 8,
-    marginBottom: 24,
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 20,
+    marginBottom: 30,
     borderWidth: 1,
     borderColor: "#f3f4f6",
   },
   stepsTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
     color: "#374151",
-    marginBottom: 14,
+    marginBottom: 10,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   step: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
-    gap: 12,
+    marginBottom: 8,
+    gap: 10,
   },
   stepBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: "#dbeafe",
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
   },
-  stepNumber: { fontSize: 12, fontWeight: "700", color: "#2563eb" },
-  stepText: { fontSize: 14, color: "#374151", flex: 1, lineHeight: 20 },
+  stepNumber: { fontSize: 11, fontWeight: "700", color: "#4A70A9" },
+  stepText: { fontSize: 13, color: "#374151", flex: 1, lineHeight: 18 },
 
   // Buttons
   primaryButton: {
     width: "100%",
-    backgroundColor: "#2563eb",
-    padding: 16,
+    backgroundColor: "#4A70A9",
+    padding: 14,
     borderRadius: 12,
     alignItems: "center",
-    marginBottom: 12,
-    shadowColor: "#2563eb",
+    marginBottom: 10,
+    shadowColor: "#4A70A9",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -431,7 +419,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: "white",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     letterSpacing: 0.3,
   },
@@ -439,18 +427,18 @@ const styles = StyleSheet.create({
   resendButton: {
     width: "100%",
     backgroundColor: "#fff",
-    padding: 15,
+    padding: 13,
     borderRadius: 12,
     alignItems: "center",
     borderWidth: 1.5,
     borderColor: "#e5e7eb",
-    marginBottom: 24,
+    marginBottom: 16,
   },
-  resendButtonText: { color: "#2563eb", fontSize: 15, fontWeight: "600" },
+  resendButtonText: { color: "#4A70A9", fontSize: 14, fontWeight: "600" },
 
   buttonDisabled: { opacity: 0.5, shadowOpacity: 0 },
 
   // Back link
-  backLink: { padding: 8 },
-  backLinkText: { fontSize: 14, color: "#9ca3af", fontWeight: "500" },
+  backLink: { padding: 6 },
+  backLinkText: { fontSize: 13, color: "#9ca3af", fontWeight: "500" },
 });

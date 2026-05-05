@@ -274,7 +274,10 @@ function PatientInfoContent() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => {
+              // Navigate to the more tab
+              router.replace("/(tabs)/MoreScreen");
+            }}
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color="#0f172a" />
@@ -300,7 +303,10 @@ function PatientInfoContent() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => {
+              // Navigate to the more tab
+              router.replace("/(tabs)/MoreScreen");
+            }}
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color="#0f172a" />
@@ -323,7 +329,10 @@ function PatientInfoContent() {
           </Text>
           <TouchableOpacity
             style={styles.blockedButton}
-            onPress={() => router.back()}
+            onPress={() => {
+              // Navigate to the more tab
+              router.replace("/(tabs)/MoreScreen");
+            }}
           >
             <Text style={styles.blockedButtonText}>Go Back</Text>
           </TouchableOpacity>
@@ -336,7 +345,11 @@ function PatientInfoContent() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => (isEditing ? setIsEditing(false) : router.back())}
+          onPress={() =>
+            isEditing
+              ? setIsEditing(false)
+              : router.replace("/(tabs)/MoreScreen")
+          }
           style={styles.backButton}
         >
           <Ionicons name="arrow-back" size={24} color="#0f172a" />

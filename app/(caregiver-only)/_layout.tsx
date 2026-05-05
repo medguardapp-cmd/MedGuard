@@ -13,22 +13,28 @@ export default function CaregiverOnlyLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarShowLabel: true,
+        tabBarShowLabel: false,
         tabBarActiveTintColor: Colors.primary,
         tabBarInactiveTintColor: Colors.textTertiary,
         tabBarStyle: {
           ...styles.tabBar,
           bottom: insets.bottom + 5,
         },
-        tabBarLabelStyle: styles.tabBarLabel,
+        tabBarIconStyle: {
+          marginTop: 5,
+        },
       }}
     >
       <Tabs.Screen
         name="connect"
         options={{
           title: "Connect",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-add-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? "person-add" : "person-add-outline"}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />
@@ -37,8 +43,12 @@ export default function CaregiverOnlyLayout() {
         name="profile"
         options={{
           title: "Profile",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? "person" : "person-outline"}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />
@@ -60,9 +70,6 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.08,
     shadowRadius: 10,
-  },
-  tabBarLabel: {
-    fontSize: 12,
-    fontWeight: "500",
+    justifyContent: "center",
   },
 });

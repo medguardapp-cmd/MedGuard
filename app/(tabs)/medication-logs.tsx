@@ -304,7 +304,10 @@ export default function MedicationLogsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => {
+            // Navigate to the more tab
+            router.push("/(tabs)/MoreScreen");
+          }}
           style={styles.backButton}
         >
           <Ionicons name="arrow-back" size={24} color="#0f172a" />

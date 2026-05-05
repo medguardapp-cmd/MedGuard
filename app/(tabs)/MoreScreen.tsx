@@ -1,4 +1,5 @@
 // app/(tabs)/more.tsx
+import Colors from "@/constants/colors";
 import { useSelectedPatient } from "@/contexts/SelectedPatientContext";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -83,7 +84,7 @@ export default function MoreScreen() {
                   : "people-outline"
               }
               size={14}
-              color="#3b82f6"
+              color="#4A70A9"
             />
             <Text style={styles.userTypeText}>
               {data.userData.userType === "patient" ? "Patient" : "Caregiver"}
@@ -94,7 +95,7 @@ export default function MoreScreen() {
             style={styles.editProfileButton}
             onPress={() => router.push("/edit-profile")}
           >
-            <Ionicons name="create-outline" size={18} color="#3b82f6" />
+            <Ionicons name="create-outline" size={18} color="#4A70A9" />
             <Text style={styles.editProfileButtonText}>Edit Profile</Text>
           </TouchableOpacity>
         </View>
@@ -125,7 +126,7 @@ export default function MoreScreen() {
           >
             <View style={styles.navButtonLeft}>
               <View style={styles.navButtonIcon}>
-                <Ionicons name="medical-outline" size={24} color="#3b82f6" />
+                <Ionicons name="medical-outline" size={24} color="#4A70A9" />
               </View>
 
               <View>
@@ -148,7 +149,7 @@ export default function MoreScreen() {
           >
             <View style={styles.navButtonLeft}>
               <View style={styles.navButtonIcon}>
-                <Ionicons name="people-outline" size={24} color="#3b82f6" />
+                <Ionicons name="people-outline" size={24} color="#4A70A9" />
               </View>
               <View>
                 <Text style={styles.navButtonTitle}>Caregiver</Text>
@@ -169,7 +170,7 @@ export default function MoreScreen() {
           >
             <View style={styles.navButtonLeft}>
               <View style={styles.navButtonIcon}>
-                <Ionicons name="calendar-outline" size={24} color="#3b82f6" />
+                <Ionicons name="calendar-outline" size={24} color="#4A70A9" />
               </View>
               <View>
                 <Text style={styles.navButtonTitle}>Medication Logs</Text>
@@ -273,7 +274,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: "#3b82f6",
+    backgroundColor: Colors.primary,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 3,
@@ -293,7 +294,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 0,
     right: 0,
-    backgroundColor: "#3b82f6",
+    backgroundColor: Colors.primary,
     borderRadius: 20,
     padding: 6,
     borderWidth: 2,
@@ -323,7 +324,7 @@ const styles = StyleSheet.create({
   userTypeText: {
     fontSize: 12,
     fontWeight: "500",
-    color: "#3b82f6",
+    color: Colors.primary,
   },
   editProfileButton: {
     flexDirection: "row",
@@ -339,7 +340,7 @@ const styles = StyleSheet.create({
   editProfileButtonText: {
     fontSize: 12,
     fontWeight: "500",
-    color: "#3b82f6",
+    color: Colors.primary,
   },
   section: {
     marginTop: 20,
