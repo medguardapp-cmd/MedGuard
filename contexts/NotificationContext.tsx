@@ -112,10 +112,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       // 🔥 Deduplicate
-      const dedupeKey = `${notification.title}_${notification.message}`;
+      const today = new Date().toDateString();
+      const dedupeKey = notification.data?.reminderId
+        ? `${notification.data.type}_${notification.data.reminderId}_${today}`
+        : `${notification.title}_${notification.message}_${today}`;
       if (dedupeRef.current.has(dedupeKey)) return;
       dedupeRef.current.add(dedupeKey);
-      setTimeout(() => dedupeRef.current.delete(dedupeKey), 10_000);
 
       // ✅ Add to in-app list
       const newNotification: Notification = {

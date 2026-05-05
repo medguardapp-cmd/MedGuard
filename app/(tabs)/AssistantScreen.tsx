@@ -476,7 +476,6 @@ export default function AssistantScreen() {
           <Text style={styles.headerTitle}>AI Assistant</Text>
         </View>
         <View style={styles.headerRight}>
-          {/* Green = profile loaded, Yellow = still loading */}
           <View
             style={[
               styles.statusDot,
@@ -487,67 +486,54 @@ export default function AssistantScreen() {
               },
             ]}
           />
-          {/* <TouchableOpacity style={styles.headerButton}>
-            <Ionicons
-              name="help-circle-outline"
-              size={24}
-              color={Colors.primary}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton}>
-            <Ionicons
-              name="settings-outline"
-              size={24}
-              color={Colors.primary}
-            />
-          </TouchableOpacity> */}
         </View>
       </View>
 
-      {/* Quick Actions */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.quickActionsContainer}
-        contentContainerStyle={styles.quickActionsContent}
-      >
-        {quickActions.map((action) => (
-          <TouchableOpacity
-            key={action.id}
-            style={[
-              styles.quickAction,
-              action.color && { borderColor: action.color },
-            ]}
-            onPress={action.action}
-          >
-            <Ionicons
-              name={action.icon}
-              size={20}
-              color={action.color || Colors.primary}
-            />
-            <Text
-              style={[
-                styles.quickActionText,
-                action.color && { color: action.color },
-              ]}
-            >
-              {action.title}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Messages + Input */}
       <KeyboardAvoidingView
-        style={[styles.messagesContainer, { marginBottom: 70 }]}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 20}
       >
+        {/* Quick Actions */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.quickActionsContainer}
+          contentContainerStyle={styles.quickActionsContent}
+        >
+          {quickActions.map((action) => (
+            <TouchableOpacity
+              key={action.id}
+              style={[
+                styles.quickAction,
+                action.color && { borderColor: action.color },
+              ]}
+              onPress={action.action}
+            >
+              <Ionicons
+                name={action.icon}
+                size={20}
+                color={action.color || Colors.primary}
+              />
+              <Text
+                style={[
+                  styles.quickActionText,
+                  action.color && { color: action.color },
+                ]}
+              >
+                {action.title}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Messages */}
         <ScrollView
           ref={scrollViewRef}
           style={styles.messagesList}
           contentContainerStyle={styles.messagesContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
           {messages.map(renderMessage)}
 
@@ -564,11 +550,12 @@ export default function AssistantScreen() {
           )}
         </ScrollView>
 
-        {/* Input bar */}
+        {/* Input */}
         <View style={styles.inputContainer}>
           <TouchableOpacity style={styles.attachButton}>
             <Ionicons name="attach" size={24} color={Colors.textSecondary} />
           </TouchableOpacity>
+
           <TextInput
             style={styles.input}
             placeholder="Ask me anything about your medications..."
@@ -578,6 +565,7 @@ export default function AssistantScreen() {
             multiline
             maxLength={500}
           />
+
           <TouchableOpacity
             style={[
               styles.sendButton,

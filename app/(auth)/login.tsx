@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,7 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../hooks/useAuth";
@@ -608,30 +607,23 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
+        style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.container}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 20}
       >
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
           {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => router.back()}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Text style={styles.backButtonText}>←</Text>
             </TouchableOpacity>
-
-            <View style={styles.iconBadge}>
-              <Image
-                source={require("../../assets/images/medguard-blue.png")}
-                style={{ width: 36, height: 36 }}
-                resizeMode="contain"
-              />
-            </View>
             <Text style={styles.title}>Welcome Back</Text>
             <Text style={styles.subtitle}>
               Sign in to your MedGuard account

@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
-    paddingBottom: 100,
+    paddingBottom: 70,
   },
   profileSection: {
     alignItems: "center",

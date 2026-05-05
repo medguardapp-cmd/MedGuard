@@ -1052,7 +1052,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
-    paddingBottom: 50,
   },
   header: {
     flexDirection: "row",
@@ -1060,7 +1059,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingTop: 50,
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",

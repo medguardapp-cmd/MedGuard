@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8fafc",
-    paddingBottom: 100,
+    paddingBottom: 50,
   },
   loadingContainer: {
     flex: 1,
@@ -892,7 +892,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     borderBottomWidth: 1,
     borderBottomColor: "#e2e8f0",
-    paddingTop: 50,
   },
   modalTitle: {
     fontSize: 18,

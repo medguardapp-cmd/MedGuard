@@ -3,7 +3,6 @@ import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -11,7 +10,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../hooks/useAuth";
@@ -384,13 +383,7 @@ export default function SignupScreen() {
             >
               <Text style={styles.backButtonText}>←</Text>
             </TouchableOpacity>
-            <View style={styles.iconBadge}>
-              <Image
-                source={require("../../assets/images/medguard-bg.png")}
-                style={{ width: 36, height: 36 }}
-                resizeMode="contain"
-              />
-            </View>
+
             <Text style={styles.title}>Create Account</Text>
             <Text style={styles.subtitle}>
               Secure your health with MedGuard
