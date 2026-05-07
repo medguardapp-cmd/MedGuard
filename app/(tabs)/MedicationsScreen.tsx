@@ -949,39 +949,28 @@ export default function MedicationsScreen() {
       userType === "caregiver" ? selectedPatientId : user?.uid;
     if (!targetUserId) return;
 
-    const reminder = reminders.find((r) => r.id === id);
-
-    if (!enabled) {
-      // ✅ Correct identifier format
-      await cancelMedicationAlarm(`${targetUserId}_${id}`);
-    } else {
-      // ✅ Call once, not inside a loop
-      if (reminder && reminder.times && reminder.times.length > 0) {
-        const isOneTime = !reminder.days || reminder.days.length === 0;
-
-        if (isOneTime) {
+    try {
+      if (!enabled) {
+        await cancelMedicationAlarm(`${targetUserId}_${id}`);
+      } else {
+        const reminder = reminders.find((r) => r.id === id);
+        if (reminder?.times?.length) {
+          const isOneTime = !reminder.days || reminder.days.length === 0;
           await scheduleMedicationAlarm(
             `${targetUserId}_${id}`,
             reminder.medicationName,
             reminder.medicationDosage,
             reminder.times,
-            [],
-          );
-        } else if (reminder.days && reminder.days.length > 0) {
-          await scheduleMedicationAlarm(
-            `${targetUserId}_${id}`,
-            reminder.medicationName,
-            reminder.medicationDosage,
-            reminder.times,
-            reminder.days,
+            isOneTime ? [] : reminder.days,
           );
         }
       }
+      await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
+        enabled,
+      });
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to update reminder");
     }
-
-    await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
-      enabled,
-    });
   };
   const handleDeleteReminder = async (id: string) => {
     const targetUserId =
@@ -993,13 +982,22 @@ export default function MedicationsScreen() {
       {
         text: "Delete",
         style: "destructive",
-        onPress: async () => {
-          // ✅ Correct identifier format — matches what was used when scheduling
-          await cancelMedicationAlarm(`${targetUserId}_${id}`);
-          await deleteDoc(doc(db, "users", targetUserId, "reminders", id));
+        onPress: () => {
+          // ✅ Don't use async here — call a separate async function
+          deleteReminderById(targetUserId, id);
         },
       },
     ]);
+  };
+
+  // ✅ Separate async function outside the Alert
+  const deleteReminderById = async (targetUserId: string, id: string) => {
+    try {
+      await cancelMedicationAlarm(`${targetUserId}_${id}`);
+      await deleteDoc(doc(db, "users", targetUserId, "reminders", id));
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to delete reminder");
+    }
   };
   const resetReminderForm = () => {
     setReminderForm({
