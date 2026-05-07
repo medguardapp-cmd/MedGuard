@@ -1276,246 +1276,253 @@ export default function MedicationsScreen() {
         }}
       >
         <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editingMedication ? "Edit Medication" : "Add New Medication"}
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setMedicationModalVisible(false);
-                  setEditingMedication(null);
-                  resetMedicationForm();
-                }}
+          <SafeAreaView edges={["bottom"]} style={styles.safeAreaModal}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {editingMedication ? "Edit Medication" : "Add New Medication"}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setMedicationModalVisible(false);
+                    setEditingMedication(null);
+                    resetMedicationForm();
+                  }}
+                >
+                  <Ionicons name="close" size={24} color={Colors.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                nestedScrollEnabled
               >
-                <Ionicons name="close" size={24} color={Colors.text} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              nestedScrollEnabled
-            >
-              {/* Medication Name with Search */}
-              <View style={styles.formGroup}>
-                <Text style={styles.label}>Medication Name *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={medicationForm.name}
-                  onChangeText={handleMedicineSearch}
-                  placeholder="Search brand or generic name..."
-                  placeholderTextColor={Colors.textTertiary}
-                  editable={!editingMedication}
-                />
-                {showSuggestions && !editingMedication && (
-                  <View style={styles.suggestionsContainer}>
-                    {isSearching ? (
-                      <View style={styles.suggestionLoading}>
-                        <ActivityIndicator
-                          size="small"
-                          color={Colors.primary}
-                        />
-                        <Text style={styles.suggestionLoadingText}>
-                          Searching...
-                        </Text>
-                      </View>
-                    ) : searchResults.length > 0 ? (
-                      <ScrollView
-                        nestedScrollEnabled
-                        style={{ maxHeight: 200 }}
-                      >
-                        {searchResults.map((item) => (
-                          <TouchableOpacity
-                            key={item.id}
-                            style={styles.suggestionItem}
-                            onPress={() => handleSelectMedicine(item)}
-                          >
-                            <View style={styles.suggestionRow}>
-                              <View style={styles.suggestionTextContainer}>
-                                <Text style={styles.suggestionBrand}>
-                                  {item.ph_brand}
-                                </Text>
-                                {!item.is_generic &&
-                                  item.generic_name !== item.ph_brand && (
-                                    <Text style={styles.suggestionGeneric}>
-                                      {item.generic_name}
-                                    </Text>
-                                  )}
-                              </View>
-                              <View
-                                style={[
-                                  styles.suggestionTypeBadge,
-                                  item.is_generic &&
-                                    styles.suggestionGenericBadge,
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    styles.suggestionTypeText,
-                                    item.is_generic &&
-                                      styles.suggestionGenericTypeText,
-                                  ]}
-                                >
-                                  {item.is_generic ? "Generic" : "Brand"}
-                                </Text>
-                              </View>
-                            </View>
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    ) : (
-                      <View style={styles.suggestionEmpty}>
-                        <Text style={styles.suggestionEmptyText}>
-                          No medicines found
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-                {selectedMedicine && (
-                  <View style={styles.selectedMedicineInfo}>
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={16}
-                      color={Colors.success}
-                    />
-                    <Text style={styles.selectedMedicineText}>
-                      {selectedMedicine.ph_brand}
-                      {!selectedMedicine.is_generic &&
-                        ` — ${selectedMedicine.generic_name}`}
-                    </Text>
-                  </View>
-                )}
-              </View>
-              {/* Dosage */}
-              <View style={styles.formGroup}>
-                <Text style={styles.label}>Dosage *</Text>
-
-                <View style={styles.formRow}>
-                  {/* Number Input */}
-                  <TextInput
-                    style={[styles.input, { flex: 1, marginRight: 8 }]}
-                    value={medicationForm.dosageAmount?.toString()}
-                    onChangeText={(text) =>
-                      setMedicationForm({
-                        ...medicationForm,
-                        dosageAmount: parseInt(text) || 0,
-                      })
-                    }
-                    placeholder="e.g. 500"
-                    placeholderTextColor={Colors.textTertiary}
-                    keyboardType="numeric"
-                  />
-
-                  {/* Unit Input - Now Editable */}
-                  <TextInput
-                    style={[styles.input, styles.unitInput]}
-                    value={medicationForm.dosageUnit || "mg"}
-                    onChangeText={(text) => {
-                      // Only allow alphabetic characters
-                      const cleaned = text.replace(/[^a-zA-Z]/g, "");
-                      setMedicationForm({
-                        ...medicationForm,
-                        dosageUnit: cleaned || "mg", // Fall back to "mg" if empty
-                      });
-                    }}
-                    placeholder="mg"
-                    placeholderTextColor={Colors.textTertiary}
-                    maxLength={5}
-                  />
-                </View>
-
-                <Text style={styles.helperText}>Amount per tablet/capsule</Text>
-              </View>
-              {/* Quantity */}
-              <View style={styles.formGroup}>
-                <Text style={styles.label}>Amount</Text>
-                <TextInput
-                  style={styles.input}
-                  value={medicationForm.quantity?.toString()}
-                  onChangeText={(text) =>
-                    setMedicationForm({
-                      ...medicationForm,
-                      quantity: parseInt(text) || 0,
-                    })
-                  }
-                  placeholder="Number of pills/units"
-                  placeholderTextColor={Colors.textTertiary}
-                  keyboardType="numeric"
-                />
-              </View>
-              {/* Refill Reminder Switch */}
-              <View style={styles.formGroup}>
-                <View style={styles.switchContainer}>
-                  <Text style={styles.label}>Refill Reminder</Text>
-                  <Switch
-                    value={medicationForm.refillReminder}
-                    onValueChange={(value) =>
-                      setMedicationForm({
-                        ...medicationForm,
-                        refillReminder: value,
-                      })
-                    }
-                    trackColor={{ false: Colors.border, true: Colors.primary }}
-                    thumbColor={Colors.surface}
-                  />
-                </View>
-              </View>
-              {/* Refill Threshold */}
-              {medicationForm.refillReminder && (
+                {/* Medication Name with Search */}
                 <View style={styles.formGroup}>
-                  <Text style={styles.label}>Refill Threshold</Text>
+                  <Text style={styles.label}>Medication Name *</Text>
                   <TextInput
                     style={styles.input}
-                    value={medicationForm.refillThreshold?.toString()}
+                    value={medicationForm.name}
+                    onChangeText={handleMedicineSearch}
+                    placeholder="Search brand or generic name..."
+                    placeholderTextColor={Colors.textTertiary}
+                    editable={!editingMedication}
+                  />
+                  {showSuggestions && !editingMedication && (
+                    <View style={styles.suggestionsContainer}>
+                      {isSearching ? (
+                        <View style={styles.suggestionLoading}>
+                          <ActivityIndicator
+                            size="small"
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.suggestionLoadingText}>
+                            Searching...
+                          </Text>
+                        </View>
+                      ) : searchResults.length > 0 ? (
+                        <ScrollView
+                          nestedScrollEnabled
+                          style={{ maxHeight: 200 }}
+                        >
+                          {searchResults.map((item) => (
+                            <TouchableOpacity
+                              key={item.id}
+                              style={styles.suggestionItem}
+                              onPress={() => handleSelectMedicine(item)}
+                            >
+                              <View style={styles.suggestionRow}>
+                                <View style={styles.suggestionTextContainer}>
+                                  <Text style={styles.suggestionBrand}>
+                                    {item.ph_brand}
+                                  </Text>
+                                  {!item.is_generic &&
+                                    item.generic_name !== item.ph_brand && (
+                                      <Text style={styles.suggestionGeneric}>
+                                        {item.generic_name}
+                                      </Text>
+                                    )}
+                                </View>
+                                <View
+                                  style={[
+                                    styles.suggestionTypeBadge,
+                                    item.is_generic &&
+                                      styles.suggestionGenericBadge,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.suggestionTypeText,
+                                      item.is_generic &&
+                                        styles.suggestionGenericTypeText,
+                                    ]}
+                                  >
+                                    {item.is_generic ? "Generic" : "Brand"}
+                                  </Text>
+                                </View>
+                              </View>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.suggestionEmpty}>
+                          <Text style={styles.suggestionEmptyText}>
+                            No medicines found
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                  {selectedMedicine && (
+                    <View style={styles.selectedMedicineInfo}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={16}
+                        color={Colors.success}
+                      />
+                      <Text style={styles.selectedMedicineText}>
+                        {selectedMedicine.ph_brand}
+                        {!selectedMedicine.is_generic &&
+                          ` — ${selectedMedicine.generic_name}`}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {/* Dosage */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Dosage *</Text>
+
+                  <View style={styles.formRow}>
+                    {/* Number Input */}
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginRight: 8 }]}
+                      value={medicationForm.dosageAmount?.toString()}
+                      onChangeText={(text) =>
+                        setMedicationForm({
+                          ...medicationForm,
+                          dosageAmount: parseInt(text) || 0,
+                        })
+                      }
+                      placeholder="e.g. 500"
+                      placeholderTextColor={Colors.textTertiary}
+                      keyboardType="numeric"
+                    />
+
+                    {/* Unit Input - Now Editable */}
+                    <TextInput
+                      style={[styles.input, styles.unitInput]}
+                      value={medicationForm.dosageUnit || "mg"}
+                      onChangeText={(text) => {
+                        // Only allow alphabetic characters
+                        const cleaned = text.replace(/[^a-zA-Z]/g, "");
+                        setMedicationForm({
+                          ...medicationForm,
+                          dosageUnit: cleaned || "mg", // Fall back to "mg" if empty
+                        });
+                      }}
+                      placeholder="mg"
+                      placeholderTextColor={Colors.textTertiary}
+                      maxLength={5}
+                    />
+                  </View>
+
+                  <Text style={styles.helperText}>
+                    Amount per tablet/capsule
+                  </Text>
+                </View>
+                {/* Quantity */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Amount</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={medicationForm.quantity?.toString()}
                     onChangeText={(text) =>
                       setMedicationForm({
                         ...medicationForm,
-                        refillThreshold: parseInt(text) || 0,
+                        quantity: parseInt(text) || 0,
                       })
                     }
-                    placeholder="Remind when quantity below"
+                    placeholder="Number of pills/units"
                     placeholderTextColor={Colors.textTertiary}
                     keyboardType="numeric"
                   />
                 </View>
-              )}
-              {/* Notes */}
-              <View style={styles.formGroup}>
-                <Text style={styles.label}>Notes (Optional)</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={medicationForm.notes}
-                  onChangeText={(text) =>
-                    setMedicationForm({ ...medicationForm, notes: text })
-                  }
-                  placeholder="Additional notes"
-                  placeholderTextColor={Colors.textTertiary}
-                  multiline
-                  numberOfLines={3}
-                />
-              </View>
-            </ScrollView>
+                {/* Refill Reminder Switch */}
+                <View style={styles.formGroup}>
+                  <View style={styles.switchContainer}>
+                    <Text style={styles.label}>Refill Reminder</Text>
+                    <Switch
+                      value={medicationForm.refillReminder}
+                      onValueChange={(value) =>
+                        setMedicationForm({
+                          ...medicationForm,
+                          refillReminder: value,
+                        })
+                      }
+                      trackColor={{
+                        false: Colors.border,
+                        true: Colors.primary,
+                      }}
+                      thumbColor={Colors.surface}
+                    />
+                  </View>
+                </View>
+                {/* Refill Threshold */}
+                {medicationForm.refillReminder && (
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Refill Threshold</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={medicationForm.refillThreshold?.toString()}
+                      onChangeText={(text) =>
+                        setMedicationForm({
+                          ...medicationForm,
+                          refillThreshold: parseInt(text) || 0,
+                        })
+                      }
+                      placeholder="Remind when quantity below"
+                      placeholderTextColor={Colors.textTertiary}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                )}
+                {/* Notes */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Notes (Optional)</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={medicationForm.notes}
+                    onChangeText={(text) =>
+                      setMedicationForm({ ...medicationForm, notes: text })
+                    }
+                    placeholder="Additional notes"
+                    placeholderTextColor={Colors.textTertiary}
+                    multiline
+                    numberOfLines={3}
+                  />
+                </View>
+              </ScrollView>
 
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setMedicationModalVisible(false);
-                  setEditingMedication(null);
-                  resetMedicationForm();
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={handleSaveMedication}
-              >
-                <Text style={styles.saveButtonText}>Save</Text>
-              </TouchableOpacity>
+              <View style={styles.modalFooter}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => {
+                    setMedicationModalVisible(false);
+                    setEditingMedication(null);
+                    resetMedicationForm();
+                  }}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.saveButton]}
+                  onPress={handleSaveMedication}
+                >
+                  <Text style={styles.saveButtonText}>Save</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </SafeAreaView>
         </View>
       </Modal>
 
@@ -2248,6 +2255,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     padding: 20,
     maxHeight: "90%",
+    paddingBottom: 20,
   },
   modalHeader: {
     flexDirection: "row",
@@ -2657,5 +2665,9 @@ const styles = StyleSheet.create({
   unitInput: {
     width: 80,
     textAlign: "center",
+  },
+  safeAreaModal: {
+    flex: 1,
+    justifyContent: "flex-end",
   },
 });

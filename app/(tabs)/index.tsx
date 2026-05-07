@@ -61,7 +61,6 @@ import {
   checkSevereInteractions,
 } from "../../services/notificationService";
 
-
 const originalConsoleLog = console.log;
 console.log = (...args) => {
   // Skip the markAsTaken check logs
@@ -197,7 +196,7 @@ const normalizeDate = (date: Date): Date => {
 };
 
 function dateKey(date: Date): string {
-  return date.toDateString();
+  return isoDateKey(date); // "2026-05-07" — safe to parse everywhere
 }
 
 /**
@@ -1031,6 +1030,31 @@ export default function HomeScreen() {
     return unsubscribe;
   }, [userType, selectedPatientId]);
 
+  useEffect(() => {
+    const targetUserId =
+      userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
+    if (!targetUserId || reminders.length === 0 || medications.length === 0)
+      return;
+
+    const today = new Date();
+
+    // Initialize any missing status logs for today
+    initializeTodayReminderLogs(
+      targetUserId,
+      today,
+      reminders,
+      medications,
+    ).catch(console.warn);
+
+    // Update statuses based on current time
+    updateReminderStatuses(
+      targetUserId,
+      today,
+      reminders,
+      medications,
+      takenLogs,
+    ).catch(console.warn);
+  }, [reminders, medications, takenLogs, selectedPatientId, userType]);
   const buildSchedule = (date: Date) => {
     const normalizedDate = normalizeDate(date);
     const dk = dateKey(normalizedDate);
@@ -1455,8 +1479,9 @@ export default function HomeScreen() {
         medicationId: quickTakeForm.medicationId || null,
         reminderId: "quick-take",
         name: quickTakeForm.name.trim(),
-        dosageAmount: quickTakeForm.dosageAmount || 0, // ✅ New format
+        dosageAmount: quickTakeForm.dosageAmount || 0,
         dosageUnit: quickTakeForm.dosageUnit || "mg",
+        dosage: `${quickTakeForm.dosageAmount || 0} ${quickTakeForm.dosageUnit || "mg"}`, // ✅ add this
         takenAt: serverTimestamp(),
         dateKey: dateKey(selectedDate),
       });

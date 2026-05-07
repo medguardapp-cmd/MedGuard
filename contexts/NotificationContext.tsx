@@ -13,7 +13,7 @@ import {
   addNotificationListener,
   registerForPushNotificationsAsync,
   savePushTokenToFirestore,
-  sendLocalNotification, // ✅ Add back
+  sendLocalNotification,
 } from "../lib/notifications";
 import { emailNotifications } from "../services/emailService";
 
@@ -62,7 +62,13 @@ export const useNotifications = () => {
 const generateId = () =>
   `${Date.now()}_${Math.random().toString(36).slice(2)}_${Platform.OS}`;
 
-const CAREGIVER_ALLOWED_TYPES = ["patient-missed", "caregiver-request"];
+// ✅ Updated: added mild-interaction to caregiver allowed types
+const CAREGIVER_ALLOWED_TYPES = [
+  "patient-missed",
+  "caregiver-request",
+  "severe-interaction",
+  "mild-interaction",
+];
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -119,7 +125,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       if (dedupeRef.current.has(dedupeKey)) return;
       dedupeRef.current.add(dedupeKey);
 
-      // ✅ Add to in-app list
+      // ✅ Always add to in-app list (push + in-app per spec)
       const newNotification: Notification = {
         ...notification,
         id: generateId(),
@@ -128,12 +134,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       setNotifications((prev) => [newNotification, ...prev]);
 
-      // ✅ Check background state ONCE
+      // ✅ Push: send when app is backgrounded AND sendPush is true
       const isBackground =
         appStateRef.current === "background" ||
         appStateRef.current === "inactive";
 
-      // ✅ Push notification (if enabled and backgrounded)
       if (sendPush && isBackground) {
         sendLocalNotification(
           notification.title,
@@ -143,7 +148,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // ✅ Email notification (if backgrounded)
+      // ✅ Email notifications (backgrounded only)
       if (user?.uid && isBackground) {
         const type = notification.data?.type;
 
@@ -173,7 +178,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             break;
 
+          // ✅ Both severe and mild interactions trigger email
           case "severe-interaction":
+          case "mild-interaction":
             emailNotifications.sendDrugInteraction(
               user.uid,
               notification.data?.drug1 || "Unknown",
@@ -242,13 +249,17 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         addNotification({
           title: incoming.request.content.title ?? "Notification",
           message: incoming.request.content.body ?? "",
-          type: incoming.request.content.data?.type ?? "info",
+          type: (["info", "success", "warning", "error"].includes(
+            incoming.request.content.data?.type as string,
+          )
+            ? incoming.request.content.data?.type
+            : "info") as Notification["type"],
           data: incoming.request.content.data,
-          sendPush: false,
+          sendPush: false, // already delivered as push, just add to in-app
         });
       },
       (_response) => {
-        // User tapped the notification
+        // User tapped the notification — handle navigation here if needed
       },
     );
     return unsubscribe;

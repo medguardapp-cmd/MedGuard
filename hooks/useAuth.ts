@@ -1,4 +1,4 @@
-// hooks/useAuth.ts - COMPLETE VERSION
+// hooks/useAuth.ts
 import {
   User,
   createUserWithEmailAndPassword,
@@ -8,11 +8,12 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { auth, db } from "../lib/firebase";
 
-// Logging utility
+export type UserRole = "patient" | "caregiver";
+
 const logAuthEvent = (event: string, data?: any) => {
   const timestamp = new Date().toISOString();
   const logData = data ? JSON.stringify(data, null, 2) : "";
@@ -34,19 +35,37 @@ const logAuthError = (event: string, error: any) => {
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<UserRole | null>(null); // ✅ Added
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     logAuthEvent("Auth hook initialized");
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       logAuthEvent("Auth state changed", {
-        userExists: !!user,
-        userId: user?.uid,
-        email: user?.email,
-        emailVerified: user?.emailVerified,
+        userExists: !!firebaseUser,
+        userId: firebaseUser?.uid,
+        email: firebaseUser?.email,
+        emailVerified: firebaseUser?.emailVerified,
       });
-      setUser(user);
+
+      setUser(firebaseUser);
+
+      // ✅ Fetch role from Firestore whenever auth state changes
+      if (firebaseUser) {
+        try {
+          const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+          const data = snap.data();
+          // userType is stored as "patient" | "caregiver" in Firestore
+          setUserRole((data?.userType as UserRole) ?? "patient");
+        } catch (err) {
+          console.error("Failed to fetch userRole:", err);
+          setUserRole("patient"); // safe fallback
+        }
+      } else {
+        setUserRole(null);
+      }
+
       setLoading(false);
     });
 
@@ -73,30 +92,20 @@ export const useAuth = () => {
         emailVerified: userCredential.user.emailVerified,
       });
 
-      // ✅ CRITICAL: Create Firestore user document immediately
       logAuthEvent("Creating Firestore user document...");
       const userRef = doc(db, "users", userCredential.user.uid);
       await setDoc(userRef, {
         email: email,
         createdAt: serverTimestamp(),
         onboardingCompleted: false,
-        userType: "patient", // Default, will be updated during onboarding
+        userType: "patient",
         emailVerified: false,
       });
-      logAuthEvent("Firestore user document created successfully", {
-        userId: userCredential.user.uid,
-        path: `users/${userCredential.user.uid}`,
-      });
+      logAuthEvent("Firestore user document created successfully");
 
-      // Send email verification
       logAuthEvent("Sending email verification...");
       await sendEmailVerification(userCredential.user);
-
-      logAuthEvent("Email verification sent successfully", {
-        userId: userCredential.user.uid,
-        email: userCredential.user.email,
-        timestamp: new Date().toISOString(),
-      });
+      logAuthEvent("Email verification sent successfully");
 
       return {
         success: true,
@@ -105,12 +114,7 @@ export const useAuth = () => {
       };
     } catch (error: any) {
       logAuthError("Signup failed", error);
-
-      return {
-        success: false,
-        error: error.message,
-        errorCode: error.code,
-      };
+      return { success: false, error: error.message, errorCode: error.code };
     }
   };
 
@@ -137,11 +141,7 @@ export const useAuth = () => {
       };
     } catch (error: any) {
       logAuthError("Login failed", error);
-      return {
-        success: false,
-        error: error.message,
-        errorCode: error.code,
-      };
+      return { success: false, error: error.message, errorCode: error.code };
     }
   };
 
@@ -163,10 +163,7 @@ export const useAuth = () => {
 
     try {
       await sendPasswordResetEmail(auth, email);
-      logAuthEvent("Password reset email sent", {
-        email,
-        timestamp: new Date().toISOString(),
-      });
+      logAuthEvent("Password reset email sent");
       return {
         success: true,
         message: "Password reset email sent successfully",
@@ -179,6 +176,7 @@ export const useAuth = () => {
 
   return {
     user,
+    userRole, // ✅ Now exported
     loading,
     signUp,
     signIn,

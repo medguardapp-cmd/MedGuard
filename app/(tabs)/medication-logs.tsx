@@ -193,7 +193,7 @@ export default function MedicationLogsScreen() {
       unsubTaken();
       unsubMissed();
     };
-  }, []);
+  }, [targetUserId]);
 
   // ─── Group logs by date ───────────────────────
   const getLogsByDate = () => {
