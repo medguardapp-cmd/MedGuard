@@ -19,7 +19,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -1265,6 +1267,7 @@ export default function MedicationsScreen() {
       </ScrollView>
 
       {/* ========== ADD/EDIT MEDICATION MODAL ========== */}
+      {/* ========== ADD/EDIT MEDICATION MODAL ========== */}
       <Modal
         animationType="slide"
         transparent
@@ -1275,8 +1278,11 @@ export default function MedicationsScreen() {
           resetMedicationForm();
         }}
       >
-        <View style={styles.modalContainer}>
-          <SafeAreaView edges={["bottom"]} style={styles.safeAreaModal}>
+        <SafeAreaView style={styles.modalContainer}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={styles.keyboardAvoidingContainer}
+          >
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
@@ -1296,6 +1302,7 @@ export default function MedicationsScreen() {
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
               >
                 {/* Medication Name with Search */}
                 <View style={styles.formGroup}>
@@ -1413,11 +1420,10 @@ export default function MedicationsScreen() {
                       style={[styles.input, styles.unitInput]}
                       value={medicationForm.dosageUnit || "mg"}
                       onChangeText={(text) => {
-                        // Only allow alphabetic characters
                         const cleaned = text.replace(/[^a-zA-Z]/g, "");
                         setMedicationForm({
                           ...medicationForm,
-                          dosageUnit: cleaned || "mg", // Fall back to "mg" if empty
+                          dosageUnit: cleaned || "mg",
                         });
                       }}
                       placeholder="mg"
@@ -1522,10 +1528,9 @@ export default function MedicationsScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-          </SafeAreaView>
-        </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
-
       {/* ========== ADD/EDIT REMINDER MODAL ========== */}
       <Modal
         animationType="slide"
@@ -1538,437 +1543,441 @@ export default function MedicationsScreen() {
           resetReminderForm();
         }}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editingReminder ? "Edit Reminder" : "New Reminder"}
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setReminderModalVisible(false);
-                  setSelectedMedicationForReminder(null);
-                  setEditingReminder(null);
-                  resetReminderForm();
-                }}
-              >
-                <Ionicons name="close" size={24} color={Colors.text} />
-              </TouchableOpacity>
-            </View>
+        <SafeAreaView style={styles.modalContainer}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={styles.keyboardAvoidingContainer}
+          >
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {editingReminder ? "Edit Reminder" : "New Reminder"}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setReminderModalVisible(false);
+                    setSelectedMedicationForReminder(null);
+                    setEditingReminder(null);
+                    resetReminderForm();
+                  }}
+                >
+                  <Ionicons name="close" size={24} color={Colors.text} />
+                </TouchableOpacity>
+              </View>
 
-            {!selectedMedicationForReminder ? (
-              <View>
-                <Text style={styles.label}>Select Medication</Text>
-                <ScrollView style={{ maxHeight: 300 }}>
-                  {medications
-                    .filter((m) => m.active)
-                    .map((med) => (
+              {!selectedMedicationForReminder ? (
+                <View>
+                  <Text style={styles.label}>Select Medication</Text>
+                  <ScrollView style={{ maxHeight: 300 }}>
+                    {medications
+                      .filter((m) => m.active)
+                      .map((med) => (
+                        <TouchableOpacity
+                          key={med.id}
+                          style={styles.medicationSelectorItem}
+                          onPress={() => {
+                            setSelectedMedicationForReminder(med);
+                            setReminderForm({
+                              ...reminderForm,
+                              medicationId: med.id,
+                              medicationName: med.name,
+                              medicationDosage: getDosageDisplay(med),
+                            });
+                          }}
+                        >
+                          <View>
+                            <Text style={styles.selectorMedName}>
+                              {med.name}
+                            </Text>
+                            <Text style={styles.selectorMedDosage}>
+                              {getDosageDisplay(med)}
+                            </Text>
+                          </View>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={20}
+                            color={Colors.textTertiary}
+                          />
+                        </TouchableOpacity>
+                      ))}
+                  </ScrollView>
+                </View>
+              ) : (
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <View style={styles.selectedMedicineInfo}>
+                    <Text style={styles.selectedMedicationName}>
+                      {selectedMedicationForReminder.name}{" "}
+                      {getDosageDisplay(selectedMedicationForReminder)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Times</Text>
+
+                    {(reminderForm.times ?? ["08:00"]).map((t, index) => (
+                      <View
+                        key={index}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          marginBottom: 8,
+                          gap: 8,
+                        }}
+                      >
+                        <TouchableOpacity
+                          style={[styles.timePickerButton, { flex: 1 }]}
+                          onPress={() => {
+                            setEditingTimeIndex(index);
+                            setShowTimePicker(true);
+                          }}
+                        >
+                          <Ionicons
+                            name="time-outline"
+                            size={20}
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.timePickerButtonText}>
+                            {formatTime(t)}
+                          </Text>
+                          <Ionicons
+                            name="chevron-down"
+                            size={18}
+                            color={Colors.textTertiary}
+                          />
+                        </TouchableOpacity>
+
+                        {(reminderForm.times ?? []).length > 1 && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              const updated = [...(reminderForm.times ?? [])];
+                              updated.splice(index, 1);
+                              setReminderForm({
+                                ...reminderForm,
+                                times: updated,
+                              });
+                            }}
+                            style={{ padding: 8 }}
+                          >
+                            <Ionicons
+                              name="remove-circle"
+                              size={22}
+                              color={Colors.error}
+                            />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    ))}
+
+                    {(reminderForm.times ?? []).length < 6 && (
                       <TouchableOpacity
-                        key={med.id}
-                        style={styles.medicationSelectorItem}
+                        style={styles.addTimeButton}
                         onPress={() => {
-                          setSelectedMedicationForReminder(med);
                           setReminderForm({
                             ...reminderForm,
-                            medicationId: med.id,
-                            medicationName: med.name,
-                            medicationDosage: getDosageDisplay(med), // ✅ Use helper
+                            times: [
+                              ...(reminderForm.times ?? ["08:00"]),
+                              "08:00",
+                            ],
                           });
                         }}
                       >
-                        <View>
-                          <Text style={styles.selectorMedName}>{med.name}</Text>
-                          <Text style={styles.selectorMedDosage}>
-                            {getDosageDisplay(med)} {/* ✅ Use helper */}
-                          </Text>
-                        </View>
                         <Ionicons
-                          name="chevron-forward"
-                          size={20}
-                          color={Colors.textTertiary}
-                        />
-                      </TouchableOpacity>
-                    ))}
-                </ScrollView>
-              </View>
-            ) : (
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                nestedScrollEnabled
-              >
-                <View style={styles.selectedMedicineInfo}>
-                  <Text style={styles.selectedMedicationName}>
-                    {selectedMedicationForReminder.name}{" "}
-                    {getDosageDisplay(selectedMedicationForReminder)}
-                  </Text>
-                  {/* <TouchableOpacity
-                    onPress={() => setSelectedMedicationForReminder(null)}
-                  >
-                    <Text style={{ color: Colors.error, fontSize: 12 }}>
-                      Change
-                    </Text>
-                  </TouchableOpacity> */}
-                </View>
-
-                <View style={styles.formGroup}>
-                  <Text style={styles.label}>Times</Text>
-
-                  {(reminderForm.times ?? ["08:00"]).map((t, index) => (
-                    <View
-                      key={index}
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        marginBottom: 8,
-                        gap: 8,
-                      }}
-                    >
-                      <TouchableOpacity
-                        style={[styles.timePickerButton, { flex: 1 }]}
-                        onPress={() => {
-                          setEditingTimeIndex(index);
-                          setShowTimePicker(true);
-                        }}
-                      >
-                        <Ionicons
-                          name="time-outline"
-                          size={20}
+                          name="add-circle-outline"
+                          size={18}
                           color={Colors.primary}
                         />
-                        <Text style={styles.timePickerButtonText}>
-                          {formatTime(t)}
+                        <Text style={styles.addTimeButtonText}>
+                          Add another time
                         </Text>
-                        <Ionicons
-                          name="chevron-down"
-                          size={18}
-                          color={Colors.textTertiary}
-                        />
                       </TouchableOpacity>
+                    )}
 
-                      {(reminderForm.times ?? []).length > 1 && (
+                    {showTimePicker && (
+                      <DateTimePicker
+                        value={timeStringToDate(
+                          (reminderForm.times ?? ["08:00"])[
+                            editingTimeIndex ?? 0
+                          ] ?? "08:00",
+                        )}
+                        mode="time"
+                        is24Hour={false}
+                        display="default"
+                        onChange={(
+                          event: DateTimePickerEvent,
+                          selectedDate?: Date,
+                        ) => {
+                          setShowTimePicker(false);
+                          if (event.type === "dismissed" || !selectedDate)
+                            return;
+                          const updated = [
+                            ...(reminderForm.times ?? ["08:00"]),
+                          ];
+                          updated[editingTimeIndex ?? 0] =
+                            dateToTimeString(selectedDate);
+                          setReminderForm({ ...reminderForm, times: updated });
+                          setEditingTimeIndex(null);
+                        }}
+                      />
+                    )}
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Repeat</Text>
+                    <View style={styles.daysContainer}>
+                      {weekDays.map((day) => (
                         <TouchableOpacity
-                          onPress={() => {
-                            const updated = [...(reminderForm.times ?? [])];
-                            updated.splice(index, 1);
+                          key={day}
+                          style={[
+                            styles.dayButton,
+                            reminderForm.days?.includes(day) &&
+                              styles.dayButtonActive,
+                          ]}
+                          onPress={() => toggleDay(day)}
+                        >
+                          <Text
+                            style={[
+                              styles.dayButtonText,
+                              reminderForm.days?.includes(day) &&
+                                styles.dayButtonTextActive,
+                            ]}
+                          >
+                            {day}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    {(!reminderForm.days || reminderForm.days.length === 0) && (
+                      <Text style={styles.hintText}>
+                        No days selected = One-time reminder
+                      </Text>
+                    )}
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Label (Optional)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={reminderForm.label}
+                      onChangeText={(text) =>
+                        setReminderForm({ ...reminderForm, label: text })
+                      }
+                      placeholder="e.g., Morning dose"
+                      placeholderTextColor={Colors.textTertiary}
+                    />
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <View style={styles.switchContainer}>
+                      <Text style={styles.label}>Sound</Text>
+                      <Switch
+                        value={reminderForm.sound}
+                        onValueChange={(value) =>
+                          setReminderForm({ ...reminderForm, sound: value })
+                        }
+                        trackColor={{
+                          false: Colors.border,
+                          true: Colors.primary,
+                        }}
+                        thumbColor={Colors.surface}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <View style={styles.switchContainer}>
+                      <Text style={styles.label}>Vibrate</Text>
+                      <Switch
+                        value={reminderForm.vibrate}
+                        onValueChange={(value) =>
+                          setReminderForm({ ...reminderForm, vibrate: value })
+                        }
+                        trackColor={{
+                          false: Colors.border,
+                          true: Colors.primary,
+                        }}
+                        thumbColor={Colors.surface}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Duration (Optional)</Text>
+                    <View style={styles.durationTypeRow}>
+                      {[
+                        { value: "none", label: "No limit" },
+                        { value: "date-range", label: "Date range" },
+                        { value: "until-empty", label: "Until empty" },
+                      ].map((opt) => (
+                        <TouchableOpacity
+                          key={opt.value}
+                          style={[
+                            styles.durationTypeBtn,
+                            reminderForm.durationType === opt.value &&
+                              styles.durationTypeBtnActive,
+                          ]}
+                          onPress={() =>
                             setReminderForm({
                               ...reminderForm,
-                              times: updated,
-                            });
-                          }}
-                          style={{ padding: 8 }}
+                              durationType: opt.value as any,
+                            })
+                          }
+                        >
+                          <Text
+                            style={[
+                              styles.durationTypeBtnText,
+                              reminderForm.durationType === opt.value &&
+                                styles.durationTypeBtnTextActive,
+                            ]}
+                          >
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                  {/* Show date inputs when "Date range" is selected */}
+                  {reminderForm.durationType === "date-range" && (
+                    <>
+                      <View style={styles.formGroup}>
+                        <Text style={styles.label}>Start Date</Text>
+                        <TouchableOpacity
+                          style={styles.datePickerButton}
+                          onPress={() => setShowStartDatePicker(true)}
                         >
                           <Ionicons
-                            name="remove-circle"
-                            size={22}
-                            color={Colors.error}
+                            name="calendar-outline"
+                            size={20}
+                            color={Colors.primary}
                           />
+                          <Text style={styles.datePickerButtonText}>
+                            {reminderForm.startDate
+                              ? new Date(
+                                  reminderForm.startDate,
+                                ).toLocaleDateString()
+                              : "Select start date"}
+                          </Text>
                         </TouchableOpacity>
-                      )}
-                    </View>
-                  ))}
+                        {showStartDatePicker && (
+                          <DateTimePicker
+                            value={
+                              reminderForm.startDate
+                                ? new Date(reminderForm.startDate)
+                                : new Date()
+                            }
+                            mode="date"
+                            display="default"
+                            onChange={(
+                              event: DateTimePickerEvent,
+                              selectedDate?: Date,
+                            ) => {
+                              setShowStartDatePicker(false);
+                              if (event.type === "dismissed" || !selectedDate)
+                                return;
+                              setReminderForm({
+                                ...reminderForm,
+                                startDate: selectedDate.toISOString(),
+                              });
+                            }}
+                          />
+                        )}
+                      </View>
 
-                  {(reminderForm.times ?? []).length < 6 && (
-                    <TouchableOpacity
-                      style={styles.addTimeButton}
-                      onPress={() => {
-                        setReminderForm({
-                          ...reminderForm,
-                          times: [
-                            ...(reminderForm.times ?? ["08:00"]),
-                            "08:00",
-                          ],
-                        });
-                      }}
-                    >
-                      <Ionicons
-                        name="add-circle-outline"
-                        size={18}
-                        color={Colors.primary}
-                      />
-                      <Text style={styles.addTimeButtonText}>
-                        Add another time
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  {showTimePicker && (
-                    <DateTimePicker
-                      value={timeStringToDate(
-                        (reminderForm.times ?? ["08:00"])[
-                          editingTimeIndex ?? 0
-                        ] ?? "08:00",
-                      )}
-                      mode="time"
-                      is24Hour={false}
-                      display="default"
-                      onChange={(
-                        event: DateTimePickerEvent,
-                        selectedDate?: Date,
-                      ) => {
-                        setShowTimePicker(false);
-                        if (event.type === "dismissed" || !selectedDate) return;
-                        const updated = [...(reminderForm.times ?? ["08:00"])];
-                        updated[editingTimeIndex ?? 0] =
-                          dateToTimeString(selectedDate);
-                        setReminderForm({ ...reminderForm, times: updated });
-                        setEditingTimeIndex(null);
-                      }}
-                    />
-                  )}
-                </View>
-
-                <View style={styles.formGroup}>
-                  <Text style={styles.label}>Repeat</Text>
-                  <View style={styles.daysContainer}>
-                    {weekDays.map((day) => (
-                      <TouchableOpacity
-                        key={day}
-                        style={[
-                          styles.dayButton,
-                          reminderForm.days?.includes(day) &&
-                            styles.dayButtonActive,
-                        ]}
-                        onPress={() => toggleDay(day)}
-                      >
-                        <Text
-                          style={[
-                            styles.dayButtonText,
-                            reminderForm.days?.includes(day) &&
-                              styles.dayButtonTextActive,
-                          ]}
+                      <View style={styles.formGroup}>
+                        <Text style={styles.label}>End Date</Text>
+                        <TouchableOpacity
+                          style={styles.datePickerButton}
+                          onPress={() => setShowEndDatePicker(true)}
                         >
-                          {day}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  {(!reminderForm.days || reminderForm.days.length === 0) && (
-                    <Text style={styles.hintText}>
-                      No days selected = One-time reminder
-                    </Text>
+                          <Ionicons
+                            name="calendar-outline"
+                            size={20}
+                            color={Colors.primary}
+                          />
+                          <Text style={styles.datePickerButtonText}>
+                            {reminderForm.endDate
+                              ? new Date(
+                                  reminderForm.endDate,
+                                ).toLocaleDateString()
+                              : "Select end date"}
+                          </Text>
+                        </TouchableOpacity>
+                        {showEndDatePicker && (
+                          <DateTimePicker
+                            value={
+                              reminderForm.endDate
+                                ? new Date(reminderForm.endDate)
+                                : new Date()
+                            }
+                            mode="date"
+                            display="default"
+                            onChange={(
+                              event: DateTimePickerEvent,
+                              selectedDate?: Date,
+                            ) => {
+                              setShowEndDatePicker(false);
+                              if (event.type === "dismissed" || !selectedDate)
+                                return;
+                              setReminderForm({
+                                ...reminderForm,
+                                endDate: selectedDate.toISOString(),
+                              });
+                            }}
+                          />
+                        )}
+                      </View>
+                    </>
                   )}
-                </View>
 
-                <View style={styles.formGroup}>
-                  <Text style={styles.label}>Label (Optional)</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={reminderForm.label}
-                    onChangeText={(text) =>
-                      setReminderForm({ ...reminderForm, label: text })
-                    }
-                    placeholder="e.g., Morning dose"
-                    placeholderTextColor={Colors.textTertiary}
-                  />
-                </View>
-
-                <View style={styles.formGroup}>
-                  <View style={styles.switchContainer}>
-                    <Text style={styles.label}>Sound</Text>
-                    <Switch
-                      value={reminderForm.sound}
-                      onValueChange={(value) =>
-                        setReminderForm({ ...reminderForm, sound: value })
-                      }
-                      trackColor={{
-                        false: Colors.border,
-                        true: Colors.primary,
-                      }}
-                      thumbColor={Colors.surface}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.formGroup}>
-                  <View style={styles.switchContainer}>
-                    <Text style={styles.label}>Vibrate</Text>
-                    <Switch
-                      value={reminderForm.vibrate}
-                      onValueChange={(value) =>
-                        setReminderForm({ ...reminderForm, vibrate: value })
-                      }
-                      trackColor={{
-                        false: Colors.border,
-                        true: Colors.primary,
-                      }}
-                      thumbColor={Colors.surface}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.formGroup}>
-                  <Text style={styles.label}>Duration (Optional)</Text>
-                  <View style={styles.durationTypeRow}>
-                    {[
-                      { value: "none", label: "No limit" },
-                      { value: "date-range", label: "Date range" },
-                      { value: "until-empty", label: "Until empty" },
-                    ].map((opt) => (
-                      <TouchableOpacity
-                        key={opt.value}
-                        style={[
-                          styles.durationTypeBtn,
-                          reminderForm.durationType === opt.value &&
-                            styles.durationTypeBtnActive,
-                        ]}
-                        onPress={() =>
-                          setReminderForm({
-                            ...reminderForm,
-                            durationType: opt.value as any,
-                          })
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.durationTypeBtnText,
-                            reminderForm.durationType === opt.value &&
-                              styles.durationTypeBtnTextActive,
-                          ]}
-                        >
-                          {opt.label}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-                {/* Show date inputs when "Date range" is selected */}
-                {reminderForm.durationType === "date-range" && (
-                  <>
+                  {/* Show info when "Until empty" is selected */}
+                  {reminderForm.durationType === "until-empty" && (
                     <View style={styles.formGroup}>
-                      <Text style={styles.label}>Start Date</Text>
-                      <TouchableOpacity
-                        style={styles.datePickerButton}
-                        onPress={() => setShowStartDatePicker(true)}
-                      >
+                      <View style={styles.infoBox}>
                         <Ionicons
-                          name="calendar-outline"
+                          name="information-circle"
                           size={20}
                           color={Colors.primary}
                         />
-                        <Text style={styles.datePickerButtonText}>
-                          {reminderForm.startDate
-                            ? new Date(
-                                reminderForm.startDate,
-                              ).toLocaleDateString()
-                            : "Select start date"}
+                        <Text style={styles.infoText}>
+                          Reminders will stop when the medication quantity
+                          reaches zero.
+                          {selectedMedicationForReminder?.quantity
+                            ? ` Current quantity: ${selectedMedicationForReminder.quantity}`
+                            : " Set quantity in medication details."}
                         </Text>
-                      </TouchableOpacity>
-                      {showStartDatePicker && (
-                        <DateTimePicker
-                          value={
-                            reminderForm.startDate
-                              ? new Date(reminderForm.startDate)
-                              : new Date()
-                          }
-                          mode="date"
-                          display="default"
-                          onChange={(
-                            event: DateTimePickerEvent,
-                            selectedDate?: Date,
-                          ) => {
-                            setShowStartDatePicker(false);
-                            if (event.type === "dismissed" || !selectedDate)
-                              return;
-                            setReminderForm({
-                              ...reminderForm,
-                              startDate: selectedDate.toISOString(),
-                            });
-                          }}
-                        />
-                      )}
+                      </View>
                     </View>
+                  )}
+                </ScrollView>
+              )}
 
-                    <View style={styles.formGroup}>
-                      <Text style={styles.label}>End Date</Text>
-                      <TouchableOpacity
-                        style={styles.datePickerButton}
-                        onPress={() => setShowEndDatePicker(true)}
-                      >
-                        <Ionicons
-                          name="calendar-outline"
-                          size={20}
-                          color={Colors.primary}
-                        />
-                        <Text style={styles.datePickerButtonText}>
-                          {reminderForm.endDate
-                            ? new Date(
-                                reminderForm.endDate,
-                              ).toLocaleDateString()
-                            : "Select end date"}
-                        </Text>
-                      </TouchableOpacity>
-                      {showEndDatePicker && (
-                        <DateTimePicker
-                          value={
-                            reminderForm.endDate
-                              ? new Date(reminderForm.endDate)
-                              : new Date()
-                          }
-                          mode="date"
-                          display="default"
-                          onChange={(
-                            event: DateTimePickerEvent,
-                            selectedDate?: Date,
-                          ) => {
-                            setShowEndDatePicker(false);
-                            if (event.type === "dismissed" || !selectedDate)
-                              return;
-                            setReminderForm({
-                              ...reminderForm,
-                              endDate: selectedDate.toISOString(),
-                            });
-                          }}
-                        />
-                      )}
-                    </View>
-                  </>
-                )}
-
-                {/* Show info when "Until empty" is selected */}
-                {reminderForm.durationType === "until-empty" && (
-                  <View style={styles.formGroup}>
-                    <View style={styles.infoBox}>
-                      <Ionicons
-                        name="information-circle"
-                        size={20}
-                        color={Colors.primary}
-                      />
-                      <Text style={styles.infoText}>
-                        Reminders will stop when the medication quantity reaches
-                        zero.
-                        {selectedMedicationForReminder?.quantity
-                          ? ` Current quantity: ${selectedMedicationForReminder.quantity}`
-                          : " Set quantity in medication details."}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-              </ScrollView>
-            )}
-
-            <View style={styles.modalFooter}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setReminderModalVisible(false);
-                  setSelectedMedicationForReminder(null);
-                  setEditingReminder(null);
-                  resetReminderForm();
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={handleSaveReminder}
-              >
-                <Text style={styles.saveButtonText}>
-                  {selectedMedicationForReminder ? "Save Reminder" : "Next"}
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.modalFooter}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => {
+                    setReminderModalVisible(false);
+                    setSelectedMedicationForReminder(null);
+                    setEditingReminder(null);
+                    resetReminderForm();
+                  }}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.saveButton]}
+                  onPress={handleSaveReminder}
+                >
+                  <Text style={styles.saveButtonText}>
+                    {selectedMedicationForReminder ? "Save Reminder" : "Next"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </Modal>
 
       {/* ========== LOG SYMPTOM MODAL ========== */}
@@ -2247,6 +2256,9 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  keyboardAvoidingContainer: {
+    flex: 1,
     justifyContent: "flex-end",
   },
   modalContent: {
