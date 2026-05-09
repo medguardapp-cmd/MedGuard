@@ -104,12 +104,6 @@ export default function AssistantScreen() {
       action: () => handleQuickAction("Show me today's medications"),
     },
     {
-      id: "qa2",
-      title: "Missed Doses",
-      icon: "alert-circle",
-      action: () => handleQuickAction("Which medications did I miss?"),
-    },
-    {
       id: "qa3",
       title: "Drug Interaction",
       icon: "medkit",
@@ -126,13 +120,6 @@ export default function AssistantScreen() {
         handleQuickAction(
           "Give me health tips based on my conditions and medications",
         ),
-    },
-    {
-      id: "qa6",
-      title: "Emergency",
-      icon: "warning",
-      action: () => handleQuickAction("Emergency assistance"),
-      color: Colors.error,
     },
   ];
 
@@ -322,33 +309,6 @@ export default function AssistantScreen() {
                       </Text>
                     )}
                   </View>
-                  {med.taken !== undefined && (
-                    <TouchableOpacity
-                      style={[
-                        styles.takenButton,
-                        med.taken && styles.takenButtonActive,
-                      ]}
-                      onPress={() => handleMarkAsTaken(med.id)}
-                      disabled={med.taken}
-                    >
-                      <Text style={styles.takenButtonText}>
-                        {med.taken ? "✓ Taken" : "Mark Taken"}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  {med.refillNeeded && (
-                    <TouchableOpacity
-                      style={styles.refillButton}
-                      onPress={() => handleSetReminder(med.name)}
-                    >
-                      <Ionicons
-                        name="refresh"
-                        size={16}
-                        color={Colors.primary}
-                      />
-                      <Text style={styles.refillButtonText}>Order Refill</Text>
-                    </TouchableOpacity>
-                  )}
                 </View>
               ))}
             </View>
@@ -360,28 +320,24 @@ export default function AssistantScreen() {
               {message.data.interactions
                 ? safeInteractions.map((interaction: any, index: number) => (
                     <View key={index} style={styles.interactionItem}>
-                      <View style={styles.interactionHeader}>
-                        <Text style={styles.interactionMeds}>
-                          {interaction.meds.join(" + ")}
-                        </Text>
-                        <View
-                          style={[
-                            styles.severityBadge,
-                            {
-                              backgroundColor:
-                                interaction.severity === "severe"
-                                  ? Colors.error
-                                  : interaction.severity === "moderate"
-                                    ? Colors.warning
-                                    : Colors.success,
-                            },
-                          ]}
+                      <Text style={styles.interactionMeds}>
+                        {interaction.meds.join(" + ")}{" "}
+                        <Text
+                          style={{
+                            fontSize: 10,
+                            fontWeight: "600",
+                            color:
+                              interaction.severity === "severe"
+                                ? Colors.error
+                                : interaction.severity === "moderate"
+                                  ? Colors.warning
+                                  : Colors.success,
+                            textTransform: "capitalize",
+                          }}
                         >
-                          <Text style={styles.severityText}>
-                            {interaction.severity}
-                          </Text>
-                        </View>
-                      </View>
+                          ({interaction.severity})
+                        </Text>
+                      </Text>
                       <Text style={styles.interactionAdvice}>
                         {interaction.advice}
                       </Text>
@@ -552,10 +508,6 @@ export default function AssistantScreen() {
 
         {/* Input */}
         <View style={styles.inputContainer}>
-          <TouchableOpacity style={styles.attachButton}>
-            <Ionicons name="attach" size={24} color={Colors.textSecondary} />
-          </TouchableOpacity>
-
           <TextInput
             style={styles.input}
             placeholder="Ask me anything about your medications..."
@@ -627,7 +579,7 @@ const styles = StyleSheet.create({
   messagesContainer: { flex: 1 },
   messagesList: { flex: 1 },
   messagesContent: { paddingHorizontal: 16, paddingVertical: 20 },
-  messageContainer: { flexDirection: "row", marginBottom: 16, maxWidth: "80%" },
+  messageContainer: { flexDirection: "row", marginBottom: 16, maxWidth: "85%" },
   userMessageContainer: { alignSelf: "flex-end" },
   assistantMessageContainer: { alignSelf: "flex-start" },
   assistantAvatar: {
@@ -640,14 +592,24 @@ const styles = StyleSheet.create({
     marginRight: 8,
     alignSelf: "flex-end",
   },
-  messageBubble: { borderRadius: 20, padding: 12, maxWidth: "100%" },
+  messageBubble: {
+    borderRadius: 20,
+    padding: 12,
+    maxWidth: "100%",
+    flexShrink: 1,
+  },
   userBubble: { backgroundColor: Colors.primary },
   assistantBubble: {
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  messageText: { fontSize: 12, lineHeight: 22, color: Colors.text },
+  messageText: {
+    fontSize: 12,
+    lineHeight: 22,
+    color: Colors.text,
+    flexShrink: 1,
+  },
   userMessageText: { color: Colors.surface },
   timestamp: {
     fontSize: 9,

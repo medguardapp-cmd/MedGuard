@@ -31,17 +31,17 @@ const emitter = NativeAlarm ? new NativeEventEmitter(NativeAlarm) : null;
 
 export const AlarmModule = {
   scheduleAlarm: async (options: AlarmOptions): Promise<string> => {
-    if (Platform.OS !== "android") return "skipped:ios";
+    if (Platform.OS !== "android" || !NativeAlarm) return "skipped";
     return NativeAlarm.scheduleAlarm(options);
   },
 
   cancelAlarm: async (alarmId: string): Promise<string> => {
-    if (Platform.OS !== "android") return "skipped:ios";
+    if (Platform.OS !== "android" || !NativeAlarm) return "skipped";
     return NativeAlarm.cancelAlarm(alarmId);
   },
 
   cancelAlarmsWithPrefix: async (prefix: string): Promise<number> => {
-    if (Platform.OS !== "android") return 0;
+    if (Platform.OS !== "android" || !NativeAlarm) return 0;
     return NativeAlarm.cancelAlarmsWithPrefix(prefix);
   },
 

@@ -1,4 +1,6 @@
 // contexts/NotificationContext.tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router } from "expo-router";
 import React, {
   createContext,
   useCallback,
@@ -44,6 +46,7 @@ interface NotificationContextType {
   clearNotifications: () => void;
   showInApp: boolean;
   setShowInApp: (show: boolean) => void;
+  navigateFromNotification: (data: any) => void;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(
@@ -62,13 +65,125 @@ export const useNotifications = () => {
 const generateId = () =>
   `${Date.now()}_${Math.random().toString(36).slice(2)}_${Platform.OS}`;
 
-// ✅ Updated: added mild-interaction to caregiver allowed types
 const CAREGIVER_ALLOWED_TYPES = [
   "patient-missed",
   "caregiver-request",
   "severe-interaction",
   "mild-interaction",
 ];
+
+const navigateFromNotification = (data: any) => {
+  if (!data?.type) return;
+
+  switch (data.type) {
+    case "missed":
+    case "late":
+    case "consecutive-missed":
+      router.push("/(tabs)/medication-logs");
+      break;
+    case "severe-interaction":
+    case "mild-interaction":
+      router.push({
+        pathname: "/(tabs)/MedicationsScreen",
+        params: { tab: "reactions" },
+      });
+      break;
+    case "caregiver-request":
+    case "patient-missed":
+      router.push("/(tabs)/MoreScreen");
+      break;
+    case "side-effect":
+      router.push("/(tabs)/MedicationsScreen");
+      break;
+    default:
+      router.push("/(tabs)/notifications");
+      break;
+  }
+};
+
+// Helper function to send caregiver emails (outside component to avoid hooks issues)
+const sendCaregiverEmails = async (
+  userId: string,
+  type: string,
+  data: any,
+  userRole: string,
+  caregiverNotificationTypes: string[],
+) => {
+  // Only proceed for patients and relevant notification types
+  if (userRole !== "patient" || !caregiverNotificationTypes.includes(type)) {
+    return;
+  }
+
+  try {
+    // Dynamic imports to avoid circular dependencies
+    const { getDocs, query, collection, where } =
+      await import("firebase/firestore");
+    const { db } = await import("../lib/firebase");
+
+    // Query caregiver_connections for this patient
+    const connectionsSnap = await getDocs(
+      query(
+        collection(db, "caregiver_connections"),
+        where("patientId", "==", userId),
+        where("status", "==", "approved"),
+      ),
+    );
+
+    // Send email to all connected caregivers
+    for (const connDoc of connectionsSnap.docs) {
+      const connection = connDoc.data();
+      const caregiverEmail = connection.caregiverEmail;
+
+      if (!caregiverEmail) continue;
+
+      // Send the appropriate email based on notification type
+      switch (type) {
+        case "missed":
+          if (data?.medicationName && data?.dosage && data?.scheduledTime) {
+            emailNotifications.sendMissedDose(
+              connection.caregiverId,
+              data.medicationName,
+              data.dosage,
+              data.scheduledTime,
+            );
+          }
+          break;
+
+        case "consecutive-missed":
+          if (data?.medicationName && data?.days) {
+            emailNotifications.sendConsecutiveMissed(
+              connection.caregiverId,
+              data.medicationName,
+              data.days,
+            );
+          }
+          break;
+
+        case "severe-interaction":
+        case "mild-interaction":
+          emailNotifications.sendDrugInteraction(
+            connection.caregiverId,
+            data?.drug1 || "Unknown",
+            data?.drug2 || "Unknown",
+            data?.description || "",
+          );
+          break;
+
+        case "side-effect":
+          if (data?.medicationName && data?.effect) {
+            emailNotifications.sendSideEffect(
+              connection.caregiverId,
+              data.medicationName,
+              data.effect,
+            );
+          }
+          break;
+      }
+    }
+  } catch (error) {
+    console.error("Error sending caregiver email notifications:", error);
+  }
+};
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -78,9 +193,40 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showInApp, setShowInApp] = useState(true);
   const appStateRef = useRef(AppState.currentState);
+  const appStartTimeRef = useRef(Date.now());
 
   const hasRegistered = useRef(false);
+  const hasLoaded = useRef(false);
   const dedupeRef = useRef<Set<string>>(new Set());
+
+  // ----------------------------
+  // LOAD FROM STORAGE
+  // ----------------------------
+  useEffect(() => {
+    Promise.all([
+      AsyncStorage.getItem("notifications"),
+      AsyncStorage.getItem("notif_dedupe"),
+    ]).then(([notifRaw, dedupeRaw]) => {
+      if (dedupeRaw) {
+        dedupeRef.current = new Set(JSON.parse(dedupeRaw));
+      }
+      if (notifRaw) {
+        const parsed = JSON.parse(notifRaw);
+        setNotifications(
+          parsed.map((n: any) => ({ ...n, timestamp: new Date(n.timestamp) })),
+        );
+      }
+      hasLoaded.current = true;
+    });
+  }, []);
+
+  // ----------------------------
+  // PERSIST TO STORAGE
+  // ----------------------------
+  useEffect(() => {
+    if (!hasLoaded.current) return;
+    AsyncStorage.setItem("notifications", JSON.stringify(notifications));
+  }, [notifications]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -117,6 +263,21 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         if (!CAREGIVER_ALLOWED_TYPES.includes(notifType)) return;
       }
 
+      // Skip missed/late notifications for first 30 seconds after app start
+      const isMissedOrLate =
+        notification.data?.type === "missed" ||
+        notification.data?.type === "late";
+
+      if (isMissedOrLate) {
+        const secondsSinceStart = (Date.now() - appStartTimeRef.current) / 1000;
+        if (secondsSinceStart < 30) {
+          console.log(
+            "⏭️ Skipping missed/late notification - app just started",
+          );
+          return;
+        }
+      }
+
       // 🔥 Deduplicate
       const today = new Date().toDateString();
       const dedupeKey = notification.data?.reminderId
@@ -124,8 +285,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         : `${notification.title}_${notification.message}_${today}`;
       if (dedupeRef.current.has(dedupeKey)) return;
       dedupeRef.current.add(dedupeKey);
+      AsyncStorage.setItem(
+        "notif_dedupe",
+        JSON.stringify([...dedupeRef.current]),
+      );
 
-      // ✅ Always add to in-app list (push + in-app per spec)
+      // Always add to in-app list
       const newNotification: Notification = {
         ...notification,
         id: generateId(),
@@ -134,7 +299,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       };
       setNotifications((prev) => [newNotification, ...prev]);
 
-      // ✅ Push: send when app is backgrounded AND sendPush is true
+      // Push: send when app is backgrounded AND sendPush is true
       const isBackground =
         appStateRef.current === "background" ||
         appStateRef.current === "inactive";
@@ -148,10 +313,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // ✅ Email notifications (backgrounded only)
+      // Email notifications (backgrounded only)
       if (user?.uid && isBackground) {
         const type = notification.data?.type;
 
+        // 1. Send email to patient
         switch (type) {
           case "missed":
             if (
@@ -178,7 +344,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             break;
 
-          // ✅ Both severe and mild interactions trigger email
           case "severe-interaction":
           case "mild-interaction":
             emailNotifications.sendDrugInteraction(
@@ -235,9 +400,27 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
             }
             break;
         }
+
+        // 2. Send email to all connected caregivers
+        const caregiverNotificationTypes = [
+          "missed",
+          "consecutive-missed",
+          "severe-interaction",
+          "mild-interaction",
+          "side-effect",
+        ];
+
+        // Call the async function without await (fire and forget)
+        sendCaregiverEmails(
+          user.uid,
+          type,
+          notification.data,
+          userRole,
+          caregiverNotificationTypes,
+        );
       }
     },
-    [userRole, user?.uid],
+    [user, userRole], // Added proper dependencies
   );
 
   // ----------------------------
@@ -255,11 +438,13 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
             ? incoming.request.content.data?.type
             : "info") as Notification["type"],
           data: incoming.request.content.data,
-          sendPush: false, // already delivered as push, just add to in-app
+          sendPush: false,
         });
       },
-      (_response) => {
-        // User tapped the notification — handle navigation here if needed
+      (response) => {
+        // User tapped the notification — navigate to the right screen
+        const data = response.notification.request.content.data;
+        navigateFromNotification(data);
       },
     );
     return unsubscribe;
@@ -279,6 +464,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   const clearNotifications = () => {
     setNotifications([]);
     dedupeRef.current.clear();
+    AsyncStorage.removeItem("notifications");
+    AsyncStorage.removeItem("notif_dedupe");
   };
 
   return (
@@ -292,6 +479,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
         clearNotifications,
         showInApp,
         setShowInApp,
+        navigateFromNotification,
       }}
     >
       {children}

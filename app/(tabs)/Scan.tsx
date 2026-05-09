@@ -48,38 +48,7 @@ function getConfidenceScore(confidence: "high" | "low", wasRetried: boolean) {
   if (confidence === "low" && wasRetried) return 70;
   return 55;
 }
-function ConfidenceMeter({ score }: { score: number }) {
-  const getColor = () => {
-    if (score >= 85) return "#27AE60";
-    if (score >= 70) return "#F39C12";
-    return "#E74C3C";
-  };
 
-  return (
-    <View style={{ marginTop: 10 }}>
-      <Text style={{ fontSize: 12, color: "#999", marginBottom: 6 }}>
-        Scan Accuracy: {score}%
-      </Text>
-
-      <View
-        style={{
-          height: 8,
-          backgroundColor: "#F0F0F5",
-          borderRadius: 10,
-          overflow: "hidden",
-        }}
-      >
-        <View
-          style={{
-            width: `${score}%`,
-            height: "100%",
-            backgroundColor: getColor(),
-          }}
-        />
-      </View>
-    </View>
-  );
-}
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? "";
@@ -676,9 +645,6 @@ export default function ScanScreen() {
                 <Text style={styles.scanAgainText}>Scan Again</Text>
               </TouchableOpacity>
             </View>
-            <ConfidenceMeter
-              score={getConfidenceScore(result.confidence, wasRetried)}
-            />
           </Animated.View>
         )}
 

@@ -1,6 +1,8 @@
 // services/notificationService.ts
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { auth, db } from "../lib/firebase";
+import { emailNotifications } from "./emailService";
 
 const formatTime12h = (time: string) => {
   const [hours, minutes] = time.split(":");
@@ -35,14 +37,108 @@ const getInteractionSeverity = (description: string): "mild" | "severe" => {
   return severeKeywords.some((k) => lower.includes(k)) ? "severe" : "mild";
 };
 
+// Add this helper function for safe user ID retrieval
+const getUserIdSafely = (): string | null => {
+  try {
+    return auth.currentUser?.uid || null;
+  } catch (error) {
+    console.error("Error getting current user:", error);
+    return null;
+  }
+};
+
+// Add this wrapper for safe email notifications
+const safeEmailNotification = async (
+  emailFunctionName: string,
+  ...args: any[]
+) => {
+  try {
+    // Check if last arg is an options object with a userId override
+    const lastArg = args[args.length - 1];
+    let userId: string | null = null;
+
+    if (lastArg && typeof lastArg === "object" && lastArg._userId) {
+      userId = lastArg._userId;
+      args = args.slice(0, -1); // Remove the options object
+    } else {
+      userId = getUserIdSafely();
+    }
+
+    if (!userId) {
+      console.log("No authenticated user, skipping email notification");
+      return;
+    }
+
+    // Check if emailNotifications exists
+    if (!emailNotifications) {
+      console.log("Email notifications service not initialized");
+      return;
+    }
+
+    // Get the function from emailNotifications
+    const emailFunction = (emailNotifications as any)[emailFunctionName];
+
+    // Check if the function exists
+    if (typeof emailFunction !== "function") {
+      console.log(
+        `Email function '${emailFunctionName}' not found in email service. Skipping email.`,
+      );
+      return;
+    }
+
+    await emailFunction(userId, ...args);
+  } catch (error: any) {
+    // Only log errors that aren't "not-found" (missing user profile)
+    if (error?.code === "not-found" || error?.message?.includes("not-found")) {
+      console.log(
+        "User profile not found in Firestore. Email notifications will work once profile is set up.",
+      );
+    } else if (error?.code === "permission-denied") {
+      console.log(
+        "Permission denied for email notification. Check Firestore rules.",
+      );
+    } else {
+      console.error("Email notification error:", error);
+    }
+  }
+};
+
+// Restore notified refs from storage
+export const restoreNotifiedRefs = async (
+  notifiedLateRef: React.RefObject<Set<string>>,
+  notifiedMissedRef: React.RefObject<Set<string>>,
+) => {
+  const [lateRaw, missedRaw] = await Promise.all([
+    AsyncStorage.getItem("notified_late"),
+    AsyncStorage.getItem("notified_missed"),
+  ]);
+
+  // Prune yesterday's keys so storage doesn't grow forever
+  const today = new Date().toDateString();
+  const pruneToToday = (keys: string[]) =>
+    keys.filter((k) => k.endsWith(today));
+
+  if (lateRaw) {
+    const keys = pruneToToday(JSON.parse(lateRaw));
+    notifiedLateRef.current = new Set(keys);
+  }
+  if (missedRaw) {
+    const keys = pruneToToday(JSON.parse(missedRaw));
+    notifiedMissedRef.current = new Set(keys);
+  }
+};
+
 // 1. Check for late/missed doses
 export const checkMissedAndLateDoses = async (
   reminders: any[],
   takenLogs: any[],
   addNotification: (n: any) => void,
-  notifiedLateRef: React.MutableRefObject<Set<string>>,
-  notifiedMissedRef: React.MutableRefObject<Set<string>>,
+  notifiedLateRef: React.RefObject<Set<string>>,
+  notifiedMissedRef: React.RefObject<Set<string>>,
+  isLogsReady: boolean,
 ) => {
+  if (!isLogsReady) return;
+
   const today = new Date();
   const todayKey = today.toDateString();
   const todayTaken = takenLogs.filter((log) => log.dateKey === todayKey);
@@ -61,11 +157,14 @@ export const checkMissedAndLateDoses = async (
       const diffMinutes = Math.floor(
         (today.getTime() - scheduled.getTime()) / 60_000,
       );
+
+      // Check taken
       const isTaken = todayTaken.some(
         (log) =>
           log.reminderId === reminder.id ||
           log.reminderId === `${reminder.id}_${time}`,
       );
+
       if (isTaken) continue;
 
       const key = `${reminder.id}_${time}_${todayKey}`;
@@ -79,20 +178,38 @@ export const checkMissedAndLateDoses = async (
       // --- LATE: 15–60 min ---
       if (diffMinutes >= 15 && diffMinutes < 60) {
         notifiedLateRef.current.add(key);
+        AsyncStorage.setItem(
+          "notified_late",
+          JSON.stringify([...notifiedLateRef.current]),
+        );
+
         addNotification({
           title: "⏰ Dose Late",
           message: `${reminder.medicationName} (${reminder.medicationDosage}) was scheduled for ${formatTime12h(time)} — ${formatElapsed(diffMinutes)}`,
           type: "warning",
           data: { reminderId: reminder.id, type: "late" },
-          sendPush: true, // ✅ push + in-app per spec
+          sendPush: true,
           channelId: "medications",
         });
+
+        // Safe email notification for late dose
+        await safeEmailNotification(
+          "sendMissedDose",
+          reminder.medicationName,
+          reminder.medicationDosage,
+          formatTime12h(time),
+        );
         continue;
       }
 
       // --- MISSED SOFT: 60–120 min ---
       if (diffMinutes >= 60 && diffMinutes < 120) {
         notifiedMissedRef.current.add(key);
+        AsyncStorage.setItem(
+          "notified_missed",
+          JSON.stringify([...notifiedMissedRef.current]),
+        );
+
         addNotification({
           title: "❌ Dose Missed",
           message: `You missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)} — ${formatElapsed(diffMinutes)}`,
@@ -100,7 +217,7 @@ export const checkMissedAndLateDoses = async (
           data: {
             reminderId: reminder.id,
             type: "missed",
-            missedKind: "soft", // ✅ soft missed
+            missedKind: "soft",
             medicationName: reminder.medicationName,
             dosage: reminder.medicationDosage,
             scheduledTime: formatTime12h(time),
@@ -109,12 +226,25 @@ export const checkMissedAndLateDoses = async (
           sendPush: true,
           channelId: "medications",
         });
+
+        // Safe email notification for missed dose
+        await safeEmailNotification(
+          "sendMissedDose",
+          reminder.medicationName,
+          reminder.medicationDosage,
+          formatTime12h(time),
+        );
         continue;
       }
 
       // --- MISSED HARD: 120+ min ---
       if (diffMinutes >= 120) {
         notifiedMissedRef.current.add(key);
+        AsyncStorage.setItem(
+          "notified_missed",
+          JSON.stringify([...notifiedMissedRef.current]),
+        );
+
         addNotification({
           title: "🚨 Dose Missed (Critical)",
           message: `You missed ${reminder.medicationName} (${reminder.medicationDosage}) scheduled for ${formatTime12h(time)} — ${formatElapsed(diffMinutes)}`,
@@ -122,15 +252,23 @@ export const checkMissedAndLateDoses = async (
           data: {
             reminderId: reminder.id,
             type: "missed",
-            missedKind: "hard", // ✅ hard missed
+            missedKind: "hard",
             medicationName: reminder.medicationName,
             dosage: reminder.medicationDosage,
             scheduledTime: formatTime12h(time),
             elapsedMinutes: diffMinutes,
           },
           sendPush: true,
-          channelId: "medication-alarms", // ✅ high-priority channel for hard miss
+          channelId: "medication-alarms",
         });
+
+        // Safe email notification for critical missed dose
+        await safeEmailNotification(
+          "sendMissedDose",
+          reminder.medicationName,
+          reminder.medicationDosage,
+          formatTime12h(time),
+        );
       }
     }
   }
@@ -141,9 +279,9 @@ export const checkConsecutiveMissedDays = async (
   reminders: any[],
   takenLogs: any[],
   addNotification: (n: any) => void,
-  notifiedConsecutiveRef: React.MutableRefObject<Set<string>>,
+  notifiedConsecutiveRef: React.RefObject<Set<string>>,
 ) => {
-  const THRESHOLD = 2; // ✅ Fixed: spec says 2+ consecutive days
+  const THRESHOLD = 2;
 
   for (const reminder of reminders) {
     if (!reminder.enabled) continue;
@@ -177,7 +315,6 @@ export const checkConsecutiveMissedDays = async (
         (1000 * 60 * 60 * 24),
     );
 
-    // ✅ Need at least THRESHOLD days of history
     if (daysSinceCreation < THRESHOLD) {
       console.log(
         `Skipping ${reminder.medicationName} - too new (${daysSinceCreation} days)`,
@@ -227,6 +364,13 @@ export const checkConsecutiveMissedDays = async (
         sendPush: true,
         channelId: "medications",
       });
+
+      // Try multiple possible function names for adherence
+      await safeEmailNotification(
+        "sendLowAdherence",
+        reminder.medicationName,
+        missedDays,
+      );
     }
   }
 };
@@ -236,12 +380,11 @@ export const checkInteractions = async (
   medications: any[],
   interactions: any[],
   addNotification: (n: any) => void,
-  notifiedInteractionsRef: React.MutableRefObject<Set<string>>,
+  notifiedInteractionsRef: React.RefObject<Set<string>>,
 ) => {
   for (const interaction of interactions) {
     const severity = getInteractionSeverity(interaction.description);
 
-    // ✅ Fixed: was only "severe"; spec requires mild too
     if (severity !== "mild" && severity !== "severe") continue;
 
     const key = `${interaction.drug_id}_${interaction.interacts_with}`;
@@ -257,7 +400,7 @@ export const checkInteractions = async (
     if (severity === "severe") {
       addNotification({
         title: "🚨 Severe Drug Interaction",
-        message: `${med1?.name ?? interaction.drug_id} may interact severely with ${med2?.name ?? interaction.interacts_with}. Consult your doctor immediately.`,
+        message: `${med1?.name ?? interaction.drug_id} and ${med2?.name ?? interaction.interacts_with} have a severe interaction. ${interaction.description}. Contact your doctor immediately.`,
         type: "error",
         data: {
           type: "severe-interaction",
@@ -267,10 +410,10 @@ export const checkInteractions = async (
           description: interaction.description,
         },
         sendPush: true,
-        channelId: "interactions",
+        channelId: "medication-alarms",
       });
     } else {
-      // ✅ Mild interaction — in-app + push per spec
+      // Mild interaction — in-app + push per spec
       addNotification({
         title: "⚠️ Drug Interaction Notice",
         message: `${med1?.name ?? interaction.drug_id} may have a mild interaction with ${med2?.name ?? interaction.interacts_with}. Monitor for side effects.`,
@@ -282,10 +425,18 @@ export const checkInteractions = async (
           drug2: interaction.interacts_with,
           description: interaction.description,
         },
-        sendPush: true, // ✅ push + in-app per spec
+        sendPush: true,
         channelId: "interactions",
       });
     }
+
+    // Safe email notification for drug interaction
+    await safeEmailNotification(
+      "sendDrugInteraction",
+      med1?.name ?? interaction.drug_id,
+      med2?.name ?? interaction.interacts_with,
+      interaction.description,
+    );
   }
 };
 
@@ -296,7 +447,7 @@ export const checkSevereInteractions = checkInteractions;
 export const checkCaregiverRequests = async (
   userId: string,
   addNotification: (n: any) => void,
-  notifiedRequestsRef: React.MutableRefObject<Set<string>>,
+  notifiedRequestsRef: React.RefObject<Set<string>>,
 ) => {
   try {
     const snap = await getDocs(
@@ -335,7 +486,7 @@ export const checkCaregiverRequests = async (
 export const checkCaregiverPatientMissedDoses = async (
   patients: { id: string; name: string }[],
   addNotification: (n: any) => void,
-  caregiverNotifiedMissedRef: React.MutableRefObject<Set<string>>,
+  caregiverNotifiedMissedRef: React.RefObject<Set<string>>,
 ) => {
   const today = new Date();
   const todayKey = today.toDateString();
@@ -385,7 +536,7 @@ export const checkCaregiverPatientMissedDoses = async (
           if (isTaken || caregiverNotifiedMissedRef.current.has(missedKey))
             continue;
 
-          if (diffMinutes < 60) continue; // Only notify caregiver on actual missed (60+ min)
+          if (diffMinutes < 60) continue;
 
           caregiverNotifiedMissedRef.current.add(missedKey);
           addNotification({
@@ -405,10 +556,86 @@ export const checkCaregiverPatientMissedDoses = async (
             sendPush: true,
             channelId: "medications",
           });
+
+          // Safe email notification to caregiver about patient's missed dose
+          await safeEmailNotification(
+            "sendPatientMissed",
+            patient.name,
+            reminder.medicationName,
+            reminder.medicationDosage,
+            formatTime12h(time),
+            { _userId: patient.id }, // ← Add this to use patient's ID
+          );
         }
       }
     } catch (error) {
       console.error(`Error checking patient ${patient.id}:`, error);
     }
+  }
+};
+
+// 6. Check interactions for medications taken today
+export const checkTodaysMedicationInteractions = async (
+  takenLogs: any[],
+  medications: any[],
+  interactions: any[],
+  addNotification: (n: any) => void,
+  notifiedInteractionsRef: React.RefObject<Set<string>>,
+) => {
+  const todayKey = new Date().toDateString();
+  const todayTaken = takenLogs.filter((log) => log.dateKey === todayKey);
+
+  if (todayTaken.length < 2) return;
+
+  // Get medication IDs taken today
+  const todayMedIds = new Set(
+    todayTaken.map((log) => log.medicationId).filter(Boolean),
+  );
+
+  for (const interaction of interactions) {
+    // Only flag if BOTH interacting drugs were taken today
+    if (
+      !todayMedIds.has(interaction.drug_id) ||
+      !todayMedIds.has(interaction.interacts_with)
+    )
+      continue;
+
+    const severity = getInteractionSeverity(interaction.description);
+
+    const key = `today_${interaction.drug_id}_${interaction.interacts_with}_${todayKey}`;
+    if (notifiedInteractionsRef.current.has(key)) continue;
+    notifiedInteractionsRef.current.add(key);
+
+    const med1 = medications.find((m) => m.drug_id === interaction.drug_id);
+    const med2 = medications.find(
+      (m) => m.drug_id === interaction.interacts_with,
+    );
+
+    addNotification({
+      title:
+        severity === "severe"
+          ? "🚨 Dangerous Interaction Today"
+          : "⚠️ Interaction Notice Today",
+      message: `You took ${med1?.name ?? interaction.drug_id} and ${med2?.name ?? interaction.interacts_with} today — these have a ${severity} interaction. ${severity === "severe" ? "Contact your doctor immediately." : "Monitor for side effects."}`,
+      type: severity === "severe" ? "error" : "warning",
+      data: {
+        type: severity === "severe" ? "severe-interaction" : "mild-interaction",
+        severity,
+        drug1: interaction.drug_id,
+        drug2: interaction.interacts_with,
+        description: interaction.description,
+        takenToday: true,
+      },
+      sendPush: true,
+      channelId: severity === "severe" ? "medication-alarms" : "interactions",
+    });
+
+    // Safe email notification for today's medication interaction
+    await safeEmailNotification(
+      "sendDrugInteraction",
+      med1?.name ?? interaction.drug_id,
+      med2?.name ?? interaction.interacts_with,
+      interaction.description,
+    );
   }
 };

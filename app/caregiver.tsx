@@ -838,7 +838,7 @@ export default function CaregiverScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => router.push("/(tabs)/MoreScreen")}
           style={styles.backButton}
         >
           <Ionicons name="arrow-back" size={24} color={Colors.surface} />
@@ -864,8 +864,8 @@ export default function CaregiverScreen() {
               <Text style={styles.cardTitle}>Your Caregiver Code</Text>
             </View>
             <Text style={styles.cardSubtitle}>
-              Share this code with people you trust. They'll send you a request
-              which you can approve or reject.
+              Share this code with people you trust. They&apos;ll send you a
+              request which you can approve or reject.
             </Text>
             {loadingCode ? (
               <ActivityIndicator

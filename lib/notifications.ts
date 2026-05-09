@@ -4,7 +4,6 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { AppState, Platform } from "react-native";
 
-
 Notifications.setNotificationHandler({
   handleNotification: async () => {
     const isForeground = AppState.currentState === "active";
@@ -70,7 +69,7 @@ export async function registerForPushNotificationsAsync() {
     try {
       const projectId =
         Constants.expoConfig?.extra?.eas?.projectId ??
-        Constants.expoConfig?.projectId;
+        Constants.easConfig?.projectId;
       if (!projectId) {
         console.log("No project ID found");
         return null;
@@ -117,9 +116,13 @@ export async function sendLocalNotification(
       data: data || {},
       sound: "default",
       priority: Notifications.AndroidNotificationPriority.HIGH,
-      channelId: channelId || "general",
+      // ❌ Remove channelId from here
     },
-    trigger: null, // null means show immediately
+    trigger: {
+      channelId: channelId || "general", // ✅ channelId goes here in trigger
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, // ✅ Use the enum
+      seconds: 1, // Show after 1 second
+    },
   });
 }
 
@@ -143,7 +146,6 @@ export async function scheduleReminderNotification(
       data: { ...data, reminderId: id },
       sound: "default",
       priority: Notifications.AndroidNotificationPriority.HIGH,
-      channelId: "medications",
     },
     trigger: {
       date: date,
@@ -181,7 +183,6 @@ export async function scheduleDailyReminder(
       body,
       sound: "default",
       priority: Notifications.AndroidNotificationPriority.HIGH,
-      channelId: "medications",
     },
     trigger,
   });

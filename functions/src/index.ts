@@ -30,10 +30,88 @@ function getTransporter() {
 const APP_NAME = "MedGuard";
 
 // ─── Get user email from Firestore ───────────────────────────────────────────
+// ── Get user email from Firestore ───────────────────────────────────────────
 async function getUserEmail(userId: string): Promise<string | null> {
   const snap = await admin.firestore().collection("users").doc(userId).get();
-  return snap.exists ? (snap.data()?.email ?? null) : null;
+  if (!snap.exists) return null;
+  const data = snap.data();
+  return data?.email ?? data?.userData?.email ?? null;
 }
+
+// ── Get caregiver ID AND caregiver email for a patient ──────────────────────
+async function getCaregiverInfoForPatient(
+  patientId: string,
+): Promise<{ caregiverId: string; caregiverEmail: string } | null> {
+  const snap = await admin
+    .firestore()
+    .collection("caregiver_connections")
+    .where("patientId", "==", patientId)
+    .where("status", "==", "approved")
+    .limit(1)
+    .get();
+
+  if (snap.empty) return null;
+  const data = snap.docs[0].data();
+  return {
+    caregiverId: data.caregiverId,
+    caregiverEmail: data.caregiverEmail,
+  };
+}
+
+export const sendEmailNotificationWithCaregiver = onCall(
+  async (request: CallableRequest<NotificationPayload>) => {
+    const { userId, type, ...payload } = request.data;
+
+    if (!userId || !type) {
+      throw new HttpsError("invalid-argument", "userId and type are required.");
+    }
+
+    const patientTemplate = templates[type];
+    if (!patientTemplate) {
+      throw new HttpsError(
+        "invalid-argument",
+        `Unknown notification type: ${type}.`,
+      );
+    }
+
+    const sends: Promise<void>[] = [];
+
+    // ── Email the patient ──
+    const patientEmail = await getUserEmail(userId);
+    if (patientEmail) {
+      const { subject, html } = patientTemplate(payload);
+      sends.push(sendEmail(patientEmail, subject, html));
+    }
+
+    // ── Email the caregiver using email from connection doc ──
+    const caregiverInfo = await getCaregiverInfoForPatient(userId);
+    if (caregiverInfo) {
+      const caregiverTemplateKey = CAREGIVER_TEMPLATE_MAP[type];
+      const caregiverTemplate = caregiverTemplateKey
+        ? templates[caregiverTemplateKey]
+        : null;
+
+      if (caregiverTemplate) {
+        const patientSnap = await admin
+          .firestore()
+          .collection("users")
+          .doc(userId)
+          .get();
+        const patientName =
+          patientSnap.data()?.userData?.name ?? "Your patient";
+
+        const { subject: cgSubject, html: cgHtml } = caregiverTemplate({
+          ...payload,
+          patientName,
+        });
+        sends.push(sendEmail(caregiverInfo.caregiverEmail, cgSubject, cgHtml));
+      }
+    }
+
+    await Promise.all(sends);
+    return { success: true };
+  },
+);
 
 // ─── Send email helper ────────────────────────────────────────────────────────
 async function sendEmail(to: string, subject: string, html: string) {
@@ -142,6 +220,72 @@ const templates: TemplateMap = {
       ${footer()}
     `,
   }),
+  "caregiver-missed": ({
+    patientName,
+    medicationName,
+    dosage,
+    scheduledTime,
+  }) => ({
+    subject: `⚠️ Your patient ${patientName} missed a dose`,
+    html: `
+      <h2>Patient Missed Dose Alert</h2>
+      <p>Your patient <strong>${patientName}</strong> missed their scheduled dose of
+      <strong>${medicationName} (${dosage})</strong> at <strong>${scheduledTime}</strong>.</p>
+      <p>You may want to follow up with them directly.</p>
+      ${footer(`${APP_NAME} — caregiver alert`)}
+    `,
+  }),
+
+  "caregiver-consecutive-missed": ({ patientName, medicationName, days }) => ({
+    subject: `🚨 Your patient ${patientName} missed ${medicationName} for ${days} days`,
+    html: `
+      <h2>Patient Low Adherence Alert</h2>
+      <p>Your patient <strong>${patientName}</strong> has missed
+      <strong>${medicationName}</strong> for
+      <strong>${days} consecutive day${days > 1 ? "s" : ""}</strong>.</p>
+      <p>Consider reaching out to them directly.</p>
+      ${footer(`${APP_NAME} — caregiver alert`)}
+    `,
+  }),
+
+  "caregiver-side-effect": ({ patientName, medicationName, effect }) => ({
+    subject: `🩺 Your patient ${patientName} reported a side effect`,
+    html: `
+      <h2>Patient Side Effect Report</h2>
+      <p>Your patient <strong>${patientName}</strong> reported experiencing
+      <strong>${effect}</strong> as a possible side effect of
+      <strong>${medicationName}</strong>.</p>
+      <p>You may want to follow up and advise them to consult their doctor.</p>
+      ${footer(`${APP_NAME} — caregiver alert`)}
+    `,
+  }),
+
+  "caregiver-drug-interaction": ({
+    patientName,
+    drug1,
+    drug2,
+    description,
+  }) => {
+    const isSevere = SEVERE_REGEX.test(description ?? "");
+    return {
+      subject: isSevere
+        ? `🚨 Your patient ${patientName} has a severe drug interaction`
+        : `⚠️ Drug Interaction Notice for ${patientName}`,
+      html: `
+        <h2>${isSevere ? "Severe" : "Mild"} Drug Interaction Detected</h2>
+        <p>Your patient <strong>${patientName}</strong>'s medications
+        <strong>${drug1}</strong> and <strong>${drug2}</strong>
+        may interact${isSevere ? " <strong>severely</strong>" : ""}.</p>
+        ${description ? `<p><em>${description}</em></p>` : ""}
+        <p>${
+          isSevere
+            ? "⚠️ Please follow up with them <strong>immediately</strong>."
+            : "Monitor for any unusual side effects and advise them to inform their doctor."
+        }</p>
+        ${footer(`${APP_NAME} — caregiver alert`)}
+      `,
+    };
+  },
 };
 
 // ─── Request payload type ─────────────────────────────────────────────────────
@@ -184,8 +328,6 @@ export const sendEmailNotification = onCall(
     }
   },
 );
-
-// ─── Firestore Helpers for Messenger Bot ─────────────────────────────────────
 
 async function getUserByPsid(psid: string) {
   const snapshot = await admin
@@ -474,3 +616,10 @@ async function callSendAPI(
     console.error("Error sending message:", error);
   }
 }
+// Maps patient event types → caregiver-specific template keys
+const CAREGIVER_TEMPLATE_MAP: Record<string, string> = {
+  missed: "caregiver-missed",
+  "consecutive-missed": "caregiver-consecutive-missed",
+  "side-effect": "caregiver-side-effect",
+  "drug-interaction": "caregiver-drug-interaction",
+};

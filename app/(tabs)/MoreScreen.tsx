@@ -184,7 +184,7 @@ export default function MoreScreen() {
         </View>
 
         {/* Settings Section */}
-        <View style={styles.section}>
+        {/*<View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="settings-outline" size={22} color="#64748b" />
             <Text style={styles.sectionTitle}>Settings</Text>
@@ -235,7 +235,7 @@ export default function MoreScreen() {
             </View>
             <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
           </TouchableOpacity>
-        </View>
+        </View>*/}
 
         {/* Logout Section */}
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>

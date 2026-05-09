@@ -83,16 +83,6 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
           <View style={styles.medicationHeader}>
             <View style={styles.medicationTitleContainer}>
               <Text style={styles.medicationName}>{medication.name}</Text>
-              <View
-                style={[
-                  styles.statusBadge,
-                  medication.active ? styles.activeBadge : styles.inactiveBadge,
-                ]}
-              >
-                <Text style={styles.statusText}>
-                  {medication.active ? "Active" : "Inactive"}
-                </Text>
-              </View>
             </View>
             <View style={styles.actionButtons}>
               {/* ✅ Edit Button - disabled for caregivers without permission */}

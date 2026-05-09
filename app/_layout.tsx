@@ -30,6 +30,9 @@ import {
   listenForAlarmActions,
 } from "../services/reminderAlarmService";
 
+// ✅ Import persistent alarm service
+import { rescheduleAllAlarms } from "../services/persistentAlarmService";
+
 SplashScreen.preventAutoHideAsync();
 
 interface ReminderDoc {
@@ -131,8 +134,6 @@ function RootLayoutNav() {
       },
 
       // ─── SNOOZE ─────────────────────────────────────────────
-      // Snooze is already handled natively in AlarmActionReceiver.kt
-      // Nothing needed here unless you want to log it to Firestore
       (reminderId: string) => {
         console.log("⏰ Snoozed:", reminderId);
       },
@@ -145,6 +146,42 @@ function RootLayoutNav() {
     );
 
     return () => sub.remove();
+  }, []);
+
+  // ✅ Reschedule all persistent alarms when user is authenticated
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          console.log("🔄 Rescheduling all persistent alarms...");
+          await rescheduleAllAlarms();
+          console.log("✅ All alarms rescheduled successfully");
+        } catch (error) {
+          console.error("❌ Error rescheduling alarms:", error);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // ✅ Periodic rescheduling (every hour) to catch any missed schedules
+  useEffect(() => {
+    const interval = setInterval(
+      async () => {
+        if (auth.currentUser) {
+          try {
+            console.log("🔄 Periodic alarm reschedule check...");
+            await rescheduleAllAlarms();
+          } catch (error) {
+            console.error("❌ Periodic reschedule error:", error);
+          }
+        }
+      },
+      60 * 60 * 1000,
+    ); // Every hour
+
+    return () => clearInterval(interval);
   }, []);
 
   // ─── Auth routing (unchanged) ──────────────────────────────

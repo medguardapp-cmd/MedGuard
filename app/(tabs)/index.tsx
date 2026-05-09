@@ -1,6 +1,7 @@
 // app/(tabs)/index.tsx
 import { NotificationBell } from "@/components/NotificationBell";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
@@ -59,6 +60,7 @@ import {
   checkConsecutiveMissedDays,
   checkMissedAndLateDoses,
   checkSevereInteractions,
+  checkTodaysMedicationInteractions,
 } from "../../services/notificationService";
 
 const originalConsoleLog = console.log;
@@ -245,16 +247,56 @@ const isReminderActiveOnDate = (
   if (!reminder.enabled) return false;
 
   const normalizedDate = normalizeDate(date);
+  const today = normalizeDate(new Date());
+
+  // ✅ Handle until-empty: show for (quantity) days from today
+  if (reminder.durationType === "until-empty") {
+    if (
+      !medication ||
+      medication.quantity === undefined ||
+      medication.quantity <= 0
+    ) {
+      return false;
+    }
+
+    // Get the creation date
+    const createdDate = reminder.createdAt?.toDate
+      ? normalizeDate(reminder.createdAt.toDate())
+      : normalizeDate(new Date());
+
+    // Calculate the end date based on REMAINING quantity from TODAY
+    // If we're looking at a past date or today, check if it's within the original window
+    if (normalizedDate <= today) {
+      // For past/today: show if within original quantity days from creation
+      const daysSinceCreation = Math.floor(
+        (normalizedDate.getTime() - createdDate.getTime()) /
+          (1000 * 60 * 60 * 24),
+      );
+
+      // Get the initial quantity (we need to know how many were originally set)
+      // Since quantity decreases, we need to check if this date was within the original range
+      // Use the current quantity to determine the window
+      const totalDays = daysSinceCreation + medication.quantity; // remaining + elapsed = total window
+
+      // Only show if within the total window
+      return daysSinceCreation < totalDays;
+    } else {
+      // For future dates: only show if within remaining quantity days from today
+      const daysFromToday = Math.floor(
+        (normalizedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+      );
+
+      return daysFromToday < medication.quantity;
+    }
+  }
 
   // Handle one-time reminders (no days array or empty days array)
   if (!reminder.days || reminder.days.length === 0) {
-    // ✅ Use scheduledDate if it exists
     if (reminder.scheduledDate) {
       const scheduledDate = normalizeDate(new Date(reminder.scheduledDate));
       return normalizedDate.getTime() === scheduledDate.getTime();
     }
 
-    // ✅ Fallback: Calculate based on creation date
     const createdDate = reminder.createdAt?.toDate
       ? reminder.createdAt.toDate()
       : new Date(reminder.createdAt);
@@ -266,7 +308,6 @@ const isReminderActiveOnDate = (
     const reminderDateTime = new Date(createdDate);
     reminderDateTime.setHours(hours, minutes, 0, 0);
 
-    // If time passed on creation day, move to next day
     if (reminderDateTime <= createdDate) {
       reminderDateTime.setDate(reminderDateTime.getDate() + 1);
     }
@@ -279,7 +320,6 @@ const isReminderActiveOnDate = (
   const dayName = DAY_NAMES[normalizedDate.getDay()];
   if (!reminder.days.includes(dayName)) return false;
 
-  // Check creation date for recurring reminders
   if (reminder.createdAt) {
     const createdDate = normalizeDate(
       reminder.createdAt?.toDate
@@ -289,7 +329,6 @@ const isReminderActiveOnDate = (
     if (normalizedDate < createdDate) return false;
   }
 
-  // Check date range for recurring reminders
   if (reminder.durationType === "date-range") {
     if (reminder.startDate) {
       const startDate = normalizeDate(new Date(reminder.startDate));
@@ -299,12 +338,6 @@ const isReminderActiveOnDate = (
       const endDate = normalizeDate(new Date(reminder.endDate));
       if (normalizedDate > endDate) return false;
     }
-  }
-
-  // Check quantity for "until-empty" reminders
-  if (reminder.durationType === "until-empty") {
-    if (!medication || medication.quantity === undefined) return false;
-    if (medication.quantity <= 0) return false;
   }
 
   return true;
@@ -680,6 +713,8 @@ export default function HomeScreen() {
     ReminderStatusLog[]
   >([]);
 
+  const [logsReady, setLogsReady] = useState(false);
+
   // Quick Take modal state
   const [quickTakeVisible, setQuickTakeVisible] = useState(false);
   const [quickTakeForm, setQuickTakeForm] = useState({
@@ -707,11 +742,28 @@ export default function HomeScreen() {
   const notifiedInteractionsRef = useRef<Set<string>>(new Set());
   const notifiedRequestsRef = useRef<Set<string>>(new Set());
   const caregiverNotifiedMissedRef = useRef<Set<string>>(new Set());
-
+  useEffect(() => {
+    Promise.all([
+      AsyncStorage.getItem("notified_late"),
+      AsyncStorage.getItem("notified_missed"),
+    ]).then(([lateRaw, missedRaw]) => {
+      const today = new Date().toDateString();
+      const pruneToToday = (keys: string[]) =>
+        keys.filter((k) => k.endsWith(today));
+      if (lateRaw) {
+        notifiedLateRef.current = new Set(pruneToToday(JSON.parse(lateRaw)));
+      }
+      if (missedRaw) {
+        notifiedMissedRef.current = new Set(
+          pruneToToday(JSON.parse(missedRaw)),
+        );
+      }
+    });
+  }, []);
   useEffect(() => {
     const runChecks = async () => {
       const userId = auth.currentUser?.uid;
-      if (!userId) return;
+      if (!userId || !logsReady) return;
 
       // Check for late/missed doses
       await checkMissedAndLateDoses(
@@ -730,9 +782,18 @@ export default function HomeScreen() {
         notifiedConsecutiveRef,
       );
 
-      // Check for severe interactions
       if (interactions.length > 0) {
         await checkSevereInteractions(
+          medications,
+          interactions,
+          addNotification,
+          notifiedInteractionsRef,
+        );
+      }
+
+      if (interactions.length > 0 && takenLogs.length > 0) {
+        await checkTodaysMedicationInteractions(
+          takenLogs,
           medications,
           interactions,
           addNotification,
@@ -766,8 +827,16 @@ export default function HomeScreen() {
     const interval = setInterval(runChecks, 60000);
 
     return () => clearInterval(interval);
-  }, [reminders, takenLogs, medications, interactions, patients, userType]);
-
+  }, [
+    reminders,
+    takenLogs,
+    medications,
+    interactions,
+    patients,
+    userType,
+    logsReady,
+    addNotification,
+  ]);
   const scrollViewRef = useRef<ScrollView>(null);
   const missedWrittenDates = useRef<Set<string>>(new Set());
   const today = normalizeDate(new Date());
@@ -822,6 +891,7 @@ export default function HomeScreen() {
       userType === "caregiver" ? selectedPatientId : auth.currentUser?.uid;
 
     if (!targetUserId) return;
+    setLogsReady(false);
 
     const unsubMeds = onSnapshot(
       query(
@@ -851,6 +921,7 @@ export default function HomeScreen() {
         setTakenLogs(
           snap.docs.map((d) => ({ id: d.id, ...d.data() })) as TakenLog[],
         );
+        setLogsReady(true);
       },
     );
 
@@ -1328,7 +1399,7 @@ export default function HomeScreen() {
       targetUserId,
       "reminder_status_logs",
       logId,
-    ); // ✅ Use targetUserId
+    );
 
     if (item.taken && item.takenLogId) {
       // Undo logic - update BOTH collections
@@ -1350,8 +1421,35 @@ export default function HomeScreen() {
               });
               // Delete from taken_logs
               await deleteDoc(
-                doc(db, "users", targetUserId, "taken_logs", item.takenLogId!), // ✅ Use targetUserId
+                doc(db, "users", targetUserId, "taken_logs", item.takenLogId!),
               );
+
+              // ✅ NEW: Increase quantity back when undoing for ALL medications
+              const medication = medications.find(
+                (m) => m.id === item.medicationId,
+              );
+
+              if (
+                medication &&
+                medication.quantity !== undefined &&
+                medication.quantity >= 0
+              ) {
+                const newQuantity = medication.quantity + 1;
+                const medRef = doc(
+                  db,
+                  "users",
+                  targetUserId,
+                  "medications",
+                  medication.id,
+                );
+                await updateDoc(medRef, {
+                  quantity: newQuantity,
+                  updatedAt: serverTimestamp(),
+                });
+                console.log(
+                  `📈 Restored ${medication.name} quantity to ${newQuantity}`,
+                );
+              }
             },
           },
         ],
@@ -1383,7 +1481,6 @@ export default function HomeScreen() {
       // ALSO keep taken_logs for backward compatibility
       const timeSpecificReminderId = `${item.reminderId}_${item.time}`;
       await addDoc(collection(db, "users", targetUserId, "taken_logs"), {
-        // ✅ Use targetUserId
         medicationId: item.medicationId,
         reminderId: timeSpecificReminderId,
         name: item.name,
@@ -1394,6 +1491,35 @@ export default function HomeScreen() {
         takenAt: serverTimestamp(),
         dateKey: dk,
       });
+
+      // ✅ NEW: Decrease medication quantity for ALL medications (when quantity > 0)
+      const medication = medications.find((m) => m.id === item.medicationId);
+
+      if (
+        medication &&
+        medication.quantity !== undefined &&
+        medication.quantity > 0 // Only decrease if quantity is greater than 0
+      ) {
+        const newQuantity = medication.quantity - 1;
+        const medRef = doc(
+          db,
+          "users",
+          targetUserId,
+          "medications",
+          medication.id,
+        );
+        await updateDoc(medRef, {
+          quantity: newQuantity,
+          updatedAt: serverTimestamp(),
+        });
+        console.log(
+          `📉 Decreased ${medication.name} quantity to ${newQuantity}`,
+        );
+      } else if (medication && medication.quantity === 0) {
+        console.log(
+          `⚠️ ${medication.name} quantity is already 0, not decreasing further`,
+        );
+      }
 
       console.log(`✅ Marked as taken in BOTH collections`);
     } catch (err: any) {
@@ -1481,10 +1607,48 @@ export default function HomeScreen() {
         name: quickTakeForm.name.trim(),
         dosageAmount: quickTakeForm.dosageAmount || 0,
         dosageUnit: quickTakeForm.dosageUnit || "mg",
-        dosage: `${quickTakeForm.dosageAmount || 0} ${quickTakeForm.dosageUnit || "mg"}`, // ✅ add this
+        dosage: dosageString,
         takenAt: serverTimestamp(),
         dateKey: dateKey(selectedDate),
       });
+
+      // ✅ NEW: Decrease quantity if this medication has "until-empty" reminders
+      if (quickTakeForm.medicationId) {
+        const medication = medications.find(
+          (m) =>
+            m.id === quickTakeForm.medicationId ||
+            m.drug_id === quickTakeForm.medicationId,
+        );
+        const hasUntilEmptyReminder = reminders.some(
+          (r) =>
+            r.medicationId === medication?.id &&
+            r.durationType === "until-empty",
+        );
+
+        if (
+          hasUntilEmptyReminder &&
+          medication &&
+          medication.quantity !== undefined &&
+          medication.quantity > 0
+        ) {
+          const newQuantity = medication.quantity - 1;
+          const medRef = doc(
+            db,
+            "users",
+            targetUserId,
+            "medications",
+            medication.id,
+          );
+          await updateDoc(medRef, {
+            quantity: newQuantity,
+            updatedAt: serverTimestamp(),
+          });
+          console.log(
+            `📉 Decreased ${medication.name} quantity to ${newQuantity} (via Quick Take)`,
+          );
+        }
+      }
+
       closeQuickTake();
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to log");

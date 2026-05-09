@@ -40,8 +40,13 @@ const getIconColor = (type: string) => {
 
 export default function NotificationsScreen() {
   const router = useRouter();
-  const { notifications, markAsRead, markAllAsRead, clearNotifications } =
-    useNotifications();
+  const {
+    notifications,
+    markAsRead,
+    markAllAsRead,
+    clearNotifications,
+    navigateFromNotification,
+  } = useNotifications();
 
   const formatTime = (date: Date) => {
     const now = new Date();
@@ -106,7 +111,10 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.notificationItem, !item.read && styles.unreadItem]}
-              onPress={() => markAsRead(item.id)}
+              onPress={() => {
+                markAsRead(item.id);
+                navigateFromNotification(item.data);
+              }}
             >
               <View
                 style={[

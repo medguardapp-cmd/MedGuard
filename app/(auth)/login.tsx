@@ -11,7 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../hooks/useAuth";
@@ -606,11 +606,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 20}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -737,7 +733,7 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
-  scrollContent: { flexGrow: 1, padding: 24, paddingBottom: 40 },
+  scrollContent: { flexGrow: 1, padding: 24 },
 
   // Header
   header: { marginTop: 16, marginBottom: 36 },

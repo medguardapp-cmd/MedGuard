@@ -105,6 +105,37 @@ const getComplianceRate = (taken: number, missed: number): number => {
   return Math.round((taken / total) * 100);
 };
 
+/**
+ * Mirrors the index screen's getTakenVariance — computes whether a dose
+ * was taken early, late, or on-time relative to its scheduled time.
+ */
+const getTakenVariance = (
+  scheduledTime: string,
+  takenAt: any,
+): "early" | "late" | "on-time" | null => {
+  if (!takenAt?.toDate) return null;
+  const takenDate: Date = takenAt.toDate();
+  const takenMinutes = takenDate.getHours() * 60 + takenDate.getMinutes();
+  const [sh, sm] = scheduledTime.split(":").map(Number);
+  const scheduledMinutes = sh * 60 + sm;
+  const diff = takenMinutes - scheduledMinutes;
+  if (diff > 60) return "late";
+  if (diff < -60) return "early";
+  return "on-time";
+};
+
+/**
+ * Extracts the scheduled time from a reminderId string.
+ * reminderId format is either "id_HH:MM" or just "id".
+ */
+const extractScheduledTime = (reminderId: string): string => {
+  const parts = reminderId.split("_");
+  const lastPart = parts[parts.length - 1];
+  return parts.length >= 2 && /^\d{2}:\d{2}$/.test(lastPart)
+    ? lastPart
+    : "00:00";
+};
+
 // ─────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────
@@ -196,6 +227,18 @@ export default function MedicationLogsScreen() {
   }, [targetUserId]);
 
   // ─── Group logs by date ───────────────────────
+  /**
+   * This mirrors the index screen's buildSchedule logic as closely as possible:
+   *
+   * SOURCE OF TRUTH:
+   *  - TAKEN items   → takenLogs (persists even if reminder_status_logs are deleted)
+   *  - MISSED items  → reminderStatusLogs (status="missed"/"late"/"not-taken" on past days),
+   *                    deduped against takenLogs so stale status entries don't show as missed
+   *  - LEGACY MISSED → missedLogs, for deleted/disabled reminders not in status logs
+   *
+   * This ensures the logs screen always shows the same history as the index screen,
+   * including for reminders/medications that have since been deleted.
+   */
   const getLogsByDate = () => {
     const logsByDate: Record<
       string,
@@ -207,40 +250,139 @@ export default function MedicationLogsScreen() {
       }
     > = {};
 
-    const today = normalizeDate(new Date()).toDateString();
+    const todayDate = normalizeDate(new Date());
+    const todayKey = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, "0")}-${String(todayDate.getDate()).padStart(2, "0")}`;
 
+    const initDate = (dk: string) => {
+      if (!logsByDate[dk]) {
+        logsByDate[dk] = { taken: [], takenLate: [], missed: [], notTaken: [] };
+      }
+    };
+
+    // ── STEP 1: Taken items from takenLogs (primary source of truth) ──────────
+    // Using takenLogs directly (not reminderStatusLogs) means this data survives
+    // status log deletions, mirroring how the index screen works for past days.
+    takenLogs
+      .filter((l) => l.reminderId !== "quick-take" && l.dateKey)
+      .forEach((l) => {
+        initDate(l.dateKey);
+
+        // Extract the scheduled time from reminderId (e.g. "remId_08:00" → "08:00")
+        const scheduledTime = extractScheduledTime(l.reminderId);
+
+        // Prefer variance from reminderStatusLogs if available; otherwise compute it
+        const statusLog = reminderStatusLogs.find(
+          (s) =>
+            s.dateKey === l.dateKey &&
+            s.medicationId === l.medicationId &&
+            (s.reminderId === l.reminderId ||
+              l.reminderId.startsWith(s.reminderId)),
+        );
+        const variance =
+          statusLog?.takenVariance ??
+          getTakenVariance(scheduledTime, l.takenAt);
+
+        const syntheticLog: ReminderStatusLog = {
+          id: l.id,
+          reminderId: l.reminderId,
+          medicationId: l.medicationId,
+          name: l.name,
+          dosage: l.dosage ?? "",
+          scheduledTime,
+          dateKey: l.dateKey,
+          status: "taken",
+          takenAt: l.takenAt,
+          takenVariance: variance,
+          updatedAt: l.takenAt,
+        };
+
+        if (variance === "late") {
+          logsByDate[l.dateKey].takenLate.push(syntheticLog);
+        } else {
+          logsByDate[l.dateKey].taken.push(syntheticLog);
+        }
+      });
+
+    // ── STEP 2: Missed / not-taken from reminderStatusLogs ────────────────────
+    // Skip status="taken" entries — already handled via takenLogs above.
+    // For past dates, treat "not-taken" and "late" as missed (same as index screen).
     reminderStatusLogs.forEach((log) => {
       if (!log.dateKey) return;
+      if (log.status === "taken") return; // handled in step 1
 
-      // Skip "not-taken" for today — they're just pending, not historical
-      if (log.status === "not-taken" && log.dateKey === today) return;
+      // Skip pending "not-taken" for today — they're just upcoming doses
+      if (log.status === "not-taken" && log.dateKey === todayKey) return;
 
-      if (!logsByDate[log.dateKey]) {
-        logsByDate[log.dateKey] = {
-          taken: [],
-          takenLate: [],
-          missed: [],
-          notTaken: [],
-        };
-      }
+      initDate(log.dateKey);
 
-      if (log.status === "taken") {
-        if (log.takenVariance === "late") {
-          logsByDate[log.dateKey].takenLate.push(log);
-        } else {
-          logsByDate[log.dateKey].taken.push(log);
-        }
-      } else if (log.status === "missed") {
-        logsByDate[log.dateKey].missed.push(log);
-      } else if (log.status === "late") {
-        // Overdue but unresolved — treat as missed for display
+      const isPastDate = log.dateKey < todayKey;
+
+      // Guard: if a taken_log exists for this slot, don't also show it as missed
+      // (handles race conditions where status log is stale)
+      const wasTaken = takenLogs.some(
+        (t) =>
+          t.dateKey === log.dateKey &&
+          (t.reminderId === `${log.reminderId}_${log.scheduledTime}` ||
+            t.reminderId === log.reminderId),
+      );
+      if (wasTaken) return;
+
+      if (log.status === "missed" || log.status === "late") {
         logsByDate[log.dateKey].missed.push(log);
       } else if (log.status === "not-taken") {
-        logsByDate[log.dateKey].notTaken.push(log);
+        if (isPastDate) {
+          // Past date + never taken = missed
+          logsByDate[log.dateKey].missed.push(log);
+        } else {
+          // Future/today not-yet-taken = pending
+          logsByDate[log.dateKey].notTaken.push(log);
+        }
       }
     });
 
-    // Remove dates that are empty after filtering
+    // ── STEP 3: Legacy missed from missedLogs ─────────────────────────────────
+    // Covers doses for reminders/medications that were deleted or disabled,
+    // exactly mirroring the "legacyMissedItems" logic in the index screen.
+    missedLogs.forEach((missedLog) => {
+      if (!missedLog.dateKey) return;
+
+      initDate(missedLog.dateKey);
+
+      // Skip if already represented in step 2
+      const existsInMissed = logsByDate[missedLog.dateKey].missed.some(
+        (s) =>
+          s.medicationId === missedLog.medicationId &&
+          s.scheduledTime === missedLog.scheduledTime,
+      );
+
+      // Skip if it was actually taken
+      const wasTaken = takenLogs.some(
+        (t) =>
+          t.dateKey === missedLog.dateKey &&
+          (t.reminderId ===
+            `${missedLog.reminderId}_${missedLog.scheduledTime}` ||
+            t.reminderId === missedLog.reminderId),
+      );
+
+      if (existsInMissed || wasTaken) return;
+
+      const syntheticMissedLog: ReminderStatusLog = {
+        id: missedLog.id,
+        reminderId: missedLog.reminderId,
+        medicationId: missedLog.medicationId,
+        name: missedLog.name,
+        dosage: missedLog.dosage,
+        scheduledTime: missedLog.scheduledTime,
+        dateKey: missedLog.dateKey,
+        status: "missed",
+        takenAt: null,
+        takenVariance: null,
+        updatedAt: missedLog.missedAt,
+      };
+      logsByDate[missedLog.dateKey].missed.push(syntheticMissedLog);
+    });
+
+    // ── Cleanup empty date buckets ────────────────────────────────────────────
     Object.keys(logsByDate).forEach((dk) => {
       const { taken, takenLate, missed, notTaken } = logsByDate[dk];
       if (
@@ -270,13 +412,17 @@ export default function MedicationLogsScreen() {
     return true;
   });
 
-  // ─── Overall stats ────────────────────────────
-  const totalTaken = reminderStatusLogs.filter(
-    (l) => l.status === "taken",
-  ).length;
-  const totalMissed = reminderStatusLogs.filter(
-    (l) => l.status === "missed",
-  ).length;
+  // ─── Overall stats (derived from the same aggregated data) ────────────────
+  // Previously this used reminderStatusLogs directly, which missed entries from
+  // deleted reminders. Now we derive from logsByDate so it matches what's shown.
+  const totalTaken = Object.values(logsByDate).reduce(
+    (sum, day) => sum + day.taken.length + day.takenLate.length,
+    0,
+  );
+  const totalMissed = Object.values(logsByDate).reduce(
+    (sum, day) => sum + day.missed.length,
+    0,
+  );
   const overallCompliance = getComplianceRate(totalTaken, totalMissed);
 
   const quickTakesCount = takenLogs.filter(
@@ -305,7 +451,6 @@ export default function MedicationLogsScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => {
-            // Navigate to the more tab
             router.push("/(tabs)/MoreScreen");
           }}
           style={styles.backButton}
@@ -462,236 +607,246 @@ export default function MedicationLogsScreen() {
         transparent={false}
         visible={logsModalVisible}
         onRequestClose={() => setLogsModalVisible(false)}
+        statusBarTranslucent={false}
       >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setLogsModalVisible(false)}>
-              <Ionicons name="arrow-back" size={24} color="#0f172a" />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>
-              {selectedDate ? formatDateLabel(selectedDate) : ""}
-            </Text>
-            <View style={{ width: 24 }} />
-          </View>
+        <View style={styles.modalContainer}>
+          <SafeAreaView edges={["top"]} style={{ backgroundColor: "#ffffff" }}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setLogsModalVisible(false)}>
+                <Ionicons name="arrow-back" size={24} color="#0f172a" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>
+                {selectedDate ? formatDateLabel(selectedDate) : ""}
+              </Text>
+              <View style={{ width: 24 }} />
+            </View>
+          </SafeAreaView>
 
-          <ScrollView style={styles.modalContent}>
-            {/* Taken Medications */}
-            {selectedLogs &&
-              (selectedLogs.taken.length > 0 ||
-                selectedLogs.takenLate.length > 0) && (
-                <View style={styles.logSection}>
-                  <View style={styles.logSectionHeader}>
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={22}
-                      color="#10b981"
-                    />
-                    <Text style={styles.logSectionTitle}>
-                      Taken Medications
-                    </Text>
-                    <Text style={styles.logSectionCount}>
-                      {selectedLogs.taken.length +
-                        selectedLogs.takenLate.length}
-                    </Text>
-                  </View>
-
-                  {selectedLogs.taken.map((log) => (
-                    <View key={log.id} style={styles.detailCard}>
-                      <View style={styles.detailCardHeader}>
-                        <Text style={styles.detailMedName}>{log.name}</Text>
-                        <View style={styles.takenBadge}>
-                          <Ionicons
-                            name="checkmark"
-                            size={12}
-                            color="#10b981"
-                          />
-                          <Text style={styles.takenBadgeText}>
-                            {log.takenVariance === "early"
-                              ? "Early"
-                              : "On time"}
-                          </Text>
-                        </View>
-                      </View>
-                      <Text style={styles.detailDosage}>{log.dosage}</Text>
-                      <Text style={styles.detailTime}>
-                        Taken at {formatTime(log.takenAt)} · scheduled{" "}
-                        {formatTime12h(log.scheduledTime)}
+          <SafeAreaView
+            edges={["bottom"]}
+            style={{ flex: 1, backgroundColor: "#f8fafc" }}
+          >
+            <ScrollView style={styles.modalContent}>
+              {/* Taken Medications */}
+              {selectedLogs &&
+                (selectedLogs.taken.length > 0 ||
+                  selectedLogs.takenLate.length > 0) && (
+                  <View style={styles.logSection}>
+                    <View style={styles.logSectionHeader}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={22}
+                        color="#10b981"
+                      />
+                      <Text style={styles.logSectionTitle}>
+                        Taken Medications
+                      </Text>
+                      <Text style={styles.logSectionCount}>
+                        {selectedLogs.taken.length +
+                          selectedLogs.takenLate.length}
                       </Text>
                     </View>
-                  ))}
 
-                  {selectedLogs.takenLate.map((log) => (
-                    <View
-                      key={log.id}
-                      style={[styles.detailCard, styles.lateCard]}
-                    >
+                    {selectedLogs.taken.map((log) => (
+                      <View key={log.id} style={styles.detailCard}>
+                        <View style={styles.detailCardHeader}>
+                          <Text style={styles.detailMedName}>{log.name}</Text>
+                          <View style={styles.takenBadge}>
+                            <Ionicons
+                              name="checkmark"
+                              size={12}
+                              color="#10b981"
+                            />
+                            <Text style={styles.takenBadgeText}>
+                              {log.takenVariance === "early"
+                                ? "Early"
+                                : "On time"}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.detailDosage}>{log.dosage}</Text>
+                        <Text style={styles.detailTime}>
+                          Taken at {formatTime(log.takenAt)} · scheduled{" "}
+                          {formatTime12h(log.scheduledTime)}
+                        </Text>
+                      </View>
+                    ))}
+
+                    {selectedLogs.takenLate.map((log) => (
+                      <View
+                        key={log.id}
+                        style={[styles.detailCard, styles.lateCard]}
+                      >
+                        <View style={styles.detailCardHeader}>
+                          <Text style={styles.detailMedName}>{log.name}</Text>
+                          <View style={styles.lateBadge}>
+                            <Ionicons name="time" size={12} color="#f59e0b" />
+                            <Text style={styles.lateBadgeText}>Late</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.detailDosage}>{log.dosage}</Text>
+                        <Text style={styles.detailTime}>
+                          Taken at {formatTime(log.takenAt)} · scheduled{" "}
+                          {formatTime12h(log.scheduledTime)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+              {/* Missed Medications */}
+              {selectedLogs && selectedLogs.missed.length > 0 && (
+                <View style={styles.logSection}>
+                  <View style={styles.logSectionHeader}>
+                    <Ionicons name="close-circle" size={22} color="#ef4444" />
+                    <Text style={styles.logSectionTitle}>
+                      Missed Medications
+                    </Text>
+                    <Text style={styles.logSectionCount}>
+                      {selectedLogs.missed.length}
+                    </Text>
+                  </View>
+                  {selectedLogs.missed.map((item) => (
+                    <View key={item.id} style={styles.detailCard}>
                       <View style={styles.detailCardHeader}>
-                        <Text style={styles.detailMedName}>{log.name}</Text>
-                        <View style={styles.lateBadge}>
-                          <Ionicons name="time" size={12} color="#f59e0b" />
-                          <Text style={styles.lateBadgeText}>Late</Text>
+                        <Text style={styles.detailMedName}>{item.name}</Text>
+                        <View style={styles.missedBadge}>
+                          <Ionicons name="close" size={12} color="#ef4444" />
+                          <Text style={styles.missedBadgeText}>Missed</Text>
                         </View>
                       </View>
-                      <Text style={styles.detailDosage}>{log.dosage}</Text>
+                      <Text style={styles.detailDosage}>{item.dosage}</Text>
                       <Text style={styles.detailTime}>
-                        Taken at {formatTime(log.takenAt)} · scheduled{" "}
-                        {formatTime12h(log.scheduledTime)}
+                        Scheduled at {formatTime12h(item.scheduledTime)}
                       </Text>
                     </View>
                   ))}
                 </View>
               )}
 
-            {/* Missed Medications */}
-            {selectedLogs && selectedLogs.missed.length > 0 && (
-              <View style={styles.logSection}>
-                <View style={styles.logSectionHeader}>
-                  <Ionicons name="close-circle" size={22} color="#ef4444" />
-                  <Text style={styles.logSectionTitle}>Missed Medications</Text>
-                  <Text style={styles.logSectionCount}>
-                    {selectedLogs.missed.length}
-                  </Text>
-                </View>
-                {selectedLogs.missed.map((item) => (
-                  <View key={item.id} style={styles.detailCard}>
-                    <View style={styles.detailCardHeader}>
-                      <Text style={styles.detailMedName}>{item.name}</Text>
-                      <View style={styles.missedBadge}>
-                        <Ionicons name="close" size={12} color="#ef4444" />
-                        <Text style={styles.missedBadgeText}>Missed</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.detailDosage}>{item.dosage}</Text>
-                    <Text style={styles.detailTime}>
-                      Scheduled at {formatTime12h(item.scheduledTime)}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* Not Taken / Pending */}
-            {selectedLogs && selectedLogs.notTaken.length > 0 && (
-              <View style={styles.logSection}>
-                <View style={styles.logSectionHeader}>
-                  <Ionicons name="time-outline" size={22} color="#94a3b8" />
-                  <Text style={styles.logSectionTitle}>Not Taken</Text>
-                  <Text style={styles.logSectionCount}>
-                    {selectedLogs.notTaken.length}
-                  </Text>
-                </View>
-                {selectedLogs.notTaken.map((item) => (
-                  <View key={item.id} style={styles.detailCard}>
-                    <View style={styles.detailCardHeader}>
-                      <Text style={styles.detailMedName}>{item.name}</Text>
-                      <View style={styles.notTakenBadge}>
-                        <Ionicons
-                          name="time-outline"
-                          size={12}
-                          color="#94a3b8"
-                        />
-                        <Text style={styles.notTakenBadgeText}>Pending</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.detailDosage}>{item.dosage}</Text>
-                    <Text style={styles.detailTime}>
-                      Scheduled at {formatTime12h(item.scheduledTime)}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* As-Needed / Quick Takes */}
-            {(() => {
-              const quickTakesForDate = takenLogs.filter(
-                (l) =>
-                  l.dateKey === selectedDate && l.reminderId === "quick-take",
-              );
-              if (quickTakesForDate.length === 0) return null;
-              return (
+              {/* Not Taken / Pending */}
+              {selectedLogs && selectedLogs.notTaken.length > 0 && (
                 <View style={styles.logSection}>
                   <View style={styles.logSectionHeader}>
-                    <Ionicons name="flash" size={22} color="#8b5cf6" />
-                    <Text style={styles.logSectionTitle}>As Needed</Text>
+                    <Ionicons name="time-outline" size={22} color="#94a3b8" />
+                    <Text style={styles.logSectionTitle}>Not Taken</Text>
                     <Text style={styles.logSectionCount}>
-                      {quickTakesForDate.length}
+                      {selectedLogs.notTaken.length}
                     </Text>
                   </View>
-                  {quickTakesForDate.map((log) => (
-                    <View key={log.id} style={styles.detailCard}>
+                  {selectedLogs.notTaken.map((item) => (
+                    <View key={item.id} style={styles.detailCard}>
                       <View style={styles.detailCardHeader}>
-                        <Text style={styles.detailMedName}>{log.name}</Text>
-                        <View
-                          style={[
-                            styles.takenBadge,
-                            { backgroundColor: "#ede9fe" },
-                          ]}
-                        >
-                          <Ionicons name="flash" size={12} color="#8b5cf6" />
-                          <Text
-                            style={[
-                              styles.takenBadgeText,
-                              { color: "#8b5cf6" },
-                            ]}
-                          >
-                            As Needed
-                          </Text>
+                        <Text style={styles.detailMedName}>{item.name}</Text>
+                        <View style={styles.notTakenBadge}>
+                          <Ionicons
+                            name="time-outline"
+                            size={12}
+                            color="#94a3b8"
+                          />
+                          <Text style={styles.notTakenBadgeText}>Pending</Text>
                         </View>
                       </View>
-                      <Text style={styles.detailDosage}>{log.dosage}</Text>
+                      <Text style={styles.detailDosage}>{item.dosage}</Text>
                       <Text style={styles.detailTime}>
-                        Taken at {formatTime(log.takenAt)}
+                        Scheduled at {formatTime12h(item.scheduledTime)}
                       </Text>
                     </View>
                   ))}
                 </View>
-              );
-            })()}
+              )}
 
-            {/* Daily Summary */}
-            {selectedLogs && (
-              <View style={styles.summaryCard}>
-                <Text style={styles.summaryTitle}>Daily Summary</Text>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Scheduled Total</Text>
-                  <Text style={styles.summaryValue}>
-                    {selectedLogs.taken.length +
-                      selectedLogs.takenLate.length +
-                      selectedLogs.missed.length +
-                      selectedLogs.notTaken.length}
-                  </Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Taken (on time)</Text>
-                  <Text style={[styles.summaryValue, { color: "#10b981" }]}>
-                    {selectedLogs.taken.length}
-                  </Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Taken (late)</Text>
-                  <Text style={[styles.summaryValue, { color: "#f59e0b" }]}>
-                    {selectedLogs.takenLate.length}
-                  </Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Missed</Text>
-                  <Text style={[styles.summaryValue, { color: "#ef4444" }]}>
-                    {selectedLogs.missed.length}
-                  </Text>
-                </View>
-                {selectedLogs.notTaken.length > 0 && (
+              {/* As-Needed / Quick Takes */}
+              {(() => {
+                const quickTakesForDate = takenLogs.filter(
+                  (l) =>
+                    l.dateKey === selectedDate && l.reminderId === "quick-take",
+                );
+                if (quickTakesForDate.length === 0) return null;
+                return (
+                  <View style={styles.logSection}>
+                    <View style={styles.logSectionHeader}>
+                      <Ionicons name="flash" size={22} color="#8b5cf6" />
+                      <Text style={styles.logSectionTitle}>As Needed</Text>
+                      <Text style={styles.logSectionCount}>
+                        {quickTakesForDate.length}
+                      </Text>
+                    </View>
+                    {quickTakesForDate.map((log) => (
+                      <View key={log.id} style={styles.detailCard}>
+                        <View style={styles.detailCardHeader}>
+                          <Text style={styles.detailMedName}>{log.name}</Text>
+                          <View
+                            style={[
+                              styles.takenBadge,
+                              { backgroundColor: "#ede9fe" },
+                            ]}
+                          >
+                            <Ionicons name="flash" size={12} color="#8b5cf6" />
+                            <Text
+                              style={[
+                                styles.takenBadgeText,
+                                { color: "#8b5cf6" },
+                              ]}
+                            >
+                              As Needed
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.detailDosage}>{log.dosage}</Text>
+                        <Text style={styles.detailTime}>
+                          Taken at {formatTime(log.takenAt)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                );
+              })()}
+
+              {/* Daily Summary */}
+              {selectedLogs && (
+                <View style={styles.summaryCard}>
+                  <Text style={styles.summaryTitle}>Daily Summary</Text>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Pending</Text>
-                    <Text style={[styles.summaryValue, { color: "#94a3b8" }]}>
-                      {selectedLogs.notTaken.length}
+                    <Text style={styles.summaryLabel}>Scheduled Total</Text>
+                    <Text style={styles.summaryValue}>
+                      {selectedLogs.taken.length +
+                        selectedLogs.takenLate.length +
+                        selectedLogs.missed.length +
+                        selectedLogs.notTaken.length}
                     </Text>
                   </View>
-                )}
-              </View>
-            )}
-          </ScrollView>
-        </SafeAreaView>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Taken (on time)</Text>
+                    <Text style={[styles.summaryValue, { color: "#10b981" }]}>
+                      {selectedLogs.taken.length}
+                    </Text>
+                  </View>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Taken (late)</Text>
+                    <Text style={[styles.summaryValue, { color: "#f59e0b" }]}>
+                      {selectedLogs.takenLate.length}
+                    </Text>
+                  </View>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Missed</Text>
+                    <Text style={[styles.summaryValue, { color: "#ef4444" }]}>
+                      {selectedLogs.missed.length}
+                    </Text>
+                  </View>
+                  {selectedLogs.notTaken.length > 0 && (
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>Pending</Text>
+                      <Text style={[styles.summaryValue, { color: "#94a3b8" }]}>
+                        {selectedLogs.notTaken.length}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </ScrollView>
+          </SafeAreaView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -869,9 +1024,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#64748b",
   },
-  missedText: {
-    color: "#ef4444",
-  },
   viewDetails: {
     borderTopWidth: 1,
     borderTopColor: "#e2e8f0",
@@ -882,27 +1034,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.primary,
   },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-  modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: "#ffffff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e2e8f0",
-  },
   modalTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: "#0f172a",
-  },
-  modalContent: {
-    padding: 16,
   },
   logSection: {
     marginBottom: 24,
@@ -1047,5 +1182,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#0f172a",
+  },
+  modalSafeArea: {
+    backgroundColor: "#ffffff",
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: "#ffffff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
   },
 });

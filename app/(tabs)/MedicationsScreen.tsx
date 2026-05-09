@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
+import { useLocalSearchParams } from "expo-router";
 import {
   addDoc,
   collection,
@@ -112,6 +113,7 @@ interface TakenLog {
   takenAt: any;
   dateKey: string;
 }
+
 const getDosageDisplay = (medication: {
   dosage?: string;
   dosageAmount?: number;
@@ -166,7 +168,12 @@ export default function MedicationsScreen() {
     "medications" | "reminders" | "reactions"
   >("medications");
   const [searchQuery, setSearchQuery] = useState("");
-
+  const { tab } = useLocalSearchParams();
+  useEffect(() => {
+    if (tab === "reactions") {
+      setActiveTab("reactions");
+    }
+  }, [tab]);
   // For caregivers - they need to select a patient
   const patientId = userType === "patient" ? user?.uid : selectedPatientId;
   const caregiverId = user?.uid;
@@ -240,7 +247,15 @@ export default function MedicationsScreen() {
     note: "",
     medication_ids: [] as string[],
   });
-
+  useEffect(() => {
+    console.log("🔍 Auth/Patient State:", {
+      userType,
+      userId: user?.uid,
+      selectedPatientId,
+      isCaregiver,
+      targetUserId: userType === "caregiver" ? selectedPatientId : user?.uid,
+    });
+  }, [userType, user?.uid, selectedPatientId, isCaregiver]);
   // Search states for medication modal
   const [searchResults, setSearchResults] = useState<MedicineSearchResult[]>(
     [],
@@ -776,10 +791,18 @@ export default function MedicationsScreen() {
   };
 
   const handleDeleteMedication = async (id: string) => {
-    // ✅ Define here so it's accessible inside the Alert callback
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : user?.uid;
-    if (!targetUserId) return;
+
+    if (!targetUserId) {
+      Alert.alert("Error", "Could not identify user. Please try again.");
+      console.error("Delete medication failed: no targetUserId", {
+        userType,
+        selectedPatientId,
+        userUid: user?.uid,
+      });
+      return;
+    }
 
     Alert.alert(
       "Delete Medication",
@@ -790,23 +813,61 @@ export default function MedicationsScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            const remindersToDelete = reminders.filter(
-              (r) => r.medicationId === id,
-            );
-
-            // ✅ Cancel native alarms before deleting
-            for (const r of remindersToDelete) {
-              await cancelMedicationAlarm(`${targetUserId}_${r.id}`);
-            }
-
-            await deleteDoc(doc(db, "users", targetUserId, "medications", id));
-
-            if (remindersToDelete.length > 0) {
-              const batch = writeBatch(db);
-              remindersToDelete.forEach((r) =>
-                batch.delete(doc(db, "users", targetUserId, "reminders", r.id)),
+            try {
+              const remindersToDelete = reminders.filter(
+                (r) => r.medicationId === id,
               );
-              await batch.commit();
+
+              // Cancel alarms for associated reminders
+              for (const r of remindersToDelete) {
+                try {
+                  await cancelMedicationAlarm(`${targetUserId}_${r.id}`);
+                  console.log("✅ Alarm cancelled for reminder:", r.id);
+                } catch (alarmError: any) {
+                  console.warn(
+                    "⚠️ Failed to cancel alarm:",
+                    alarmError?.message,
+                  );
+                }
+              }
+
+              // Delete the medication
+              await deleteDoc(
+                doc(db, "users", targetUserId, "medications", id),
+              );
+              console.log("✅ Medication deleted:", id);
+
+              // Delete associated reminders in batch
+              if (remindersToDelete.length > 0) {
+                const batch = writeBatch(db);
+                remindersToDelete.forEach((r) => {
+                  batch.delete(
+                    doc(db, "users", targetUserId, "reminders", r.id),
+                  );
+                  // Also clean up logs for each reminder
+                  try {
+                    deleteDoc(
+                      doc(
+                        db,
+                        "users",
+                        targetUserId,
+                        "reminder_status_logs",
+                        r.id,
+                      ),
+                    );
+                  } catch {}
+                });
+                await batch.commit();
+                console.log("✅ Associated reminders deleted");
+              }
+
+              Alert.alert("Success", "Medication deleted successfully");
+            } catch (error: any) {
+              console.error("❌ Delete medication error:", error);
+              Alert.alert(
+                "Error",
+                error.message || "Failed to delete medication",
+              );
             }
           },
         },
@@ -917,13 +978,12 @@ export default function MedicationsScreen() {
       // ✅ Schedule the alarm if enabled
       if (reminderData.enabled && times.length > 0) {
         if (isOneTime && scheduledDate) {
-          // One-time reminder - use times array and empty days
           await scheduleMedicationAlarm(
             `${targetUserId}_${reminderId}`,
             reminderData.medicationName,
             reminderData.medicationDosage,
-            times, // ✅ pass times array
-            [], // ✅ empty days = one-time
+            times,
+            [],
           );
         } else if (normalizedDays.length > 0) {
           // Recurring reminder
@@ -931,11 +991,11 @@ export default function MedicationsScreen() {
             `${targetUserId}_${reminderId}`,
             reminderData.medicationName,
             reminderData.medicationDosage,
-            times, // ✅ pass times array
-            normalizedDays, // ✅ pass day names
+            times,
+            normalizedDays,
           );
         }
-      }
+      } // ✅ This closing brace was missing!
 
       setReminderModalVisible(false);
       setSelectedMedicationForReminder(null);
@@ -949,56 +1009,137 @@ export default function MedicationsScreen() {
   const handleToggleReminder = async (id: string, enabled: boolean) => {
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : user?.uid;
-    if (!targetUserId) return;
+
+    if (!targetUserId) {
+      Alert.alert("Error", "Could not identify user. Please try again.");
+      return;
+    }
 
     try {
+      const alarmId = `${targetUserId}_${id}`;
+
       if (!enabled) {
-        await cancelMedicationAlarm(`${targetUserId}_${id}`);
-      } else {
-        const reminder = reminders.find((r) => r.id === id);
-        if (reminder?.times?.length) {
-          const isOneTime = !reminder.days || reminder.days.length === 0;
-          await scheduleMedicationAlarm(
-            `${targetUserId}_${id}`,
-            reminder.medicationName,
-            reminder.medicationDosage,
-            reminder.times,
-            isOneTime ? [] : reminder.days,
+        // Turning OFF — cancel alarm safely
+        try {
+          await cancelMedicationAlarm(alarmId);
+        } catch (alarmError: any) {
+          console.warn(
+            "⚠️ Could not cancel alarm (continuing):",
+            alarmError?.message,
           );
+          // Don't block the toggle if alarm cancellation fails
+        }
+      } else {
+        // Turning ON — reschedule alarm safely
+        const reminder = reminders.find((r) => r.id === id);
+
+        if (!reminder) {
+          Alert.alert("Error", "Reminder not found.");
+          return;
+        }
+
+        // Check activity as if it were enabled, since we're in the process of enabling it
+        if (!isReminderActive({ ...reminder, enabled: true })) {
+          Alert.alert(
+            "Notice",
+            "This reminder has expired and cannot be re-enabled.",
+          );
+          return;
+        }
+        // ... rest of the code
+
+        if (reminder.times?.length) {
+          const isOneTime = !reminder.days || reminder.days.length === 0;
+          try {
+            await scheduleMedicationAlarm(
+              alarmId,
+              reminder.medicationName,
+              reminder.medicationDosage,
+              reminder.times,
+              isOneTime ? [] : reminder.days,
+            );
+          } catch (alarmError: any) {
+            console.warn(
+              "⚠️ Could not schedule alarm (continuing):",
+              alarmError?.message,
+            );
+          }
         }
       }
+
+      // Always update Firestore regardless of alarm success/failure
       await updateDoc(doc(db, "users", targetUserId, "reminders", id), {
         enabled,
       });
     } catch (error: any) {
+      console.error("❌ Toggle reminder error:", error);
       Alert.alert("Error", error.message || "Failed to update reminder");
     }
   };
   const handleDeleteReminder = async (id: string) => {
     const targetUserId =
       userType === "caregiver" ? selectedPatientId : user?.uid;
-    if (!targetUserId) return;
+
+    if (!targetUserId) {
+      Alert.alert("Error", "Could not identify user. Please try again.");
+      console.error("Delete reminder failed: no targetUserId", {
+        userType,
+        selectedPatientId,
+        userUid: user?.uid,
+      });
+      return;
+    }
 
     Alert.alert("Delete Reminder", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
-        onPress: () => {
-          // ✅ Don't use async here — call a separate async function
-          deleteReminderById(targetUserId, id);
+        onPress: async () => {
+          try {
+            await deleteReminderById(targetUserId, id);
+          } catch (error: any) {
+            Alert.alert("Error", error.message || "Failed to delete reminder");
+          }
         },
       },
     ]);
   };
 
-  // ✅ Separate async function outside the Alert
   const deleteReminderById = async (targetUserId: string, id: string) => {
     try {
-      await cancelMedicationAlarm(`${targetUserId}_${id}`);
+      // ✅ Safely cancel alarm - wrapped in its own try-catch
+      try {
+        const alarmId = `${targetUserId}_${id}`;
+        await cancelMedicationAlarm(alarmId);
+        console.log("✅ Alarm cancelled:", alarmId);
+      } catch (alarmError: any) {
+        console.warn(
+          "⚠️ Failed to cancel alarm (continuing):",
+          alarmError?.message,
+        );
+        // Continue with deletion even if alarm cancellation fails
+      }
+
+      // Delete the reminder
       await deleteDoc(doc(db, "users", targetUserId, "reminders", id));
+      console.log("✅ Reminder deleted:", id);
+
+      // Also delete the corresponding reminder_status_logs entry
+      try {
+        await deleteDoc(
+          doc(db, "users", targetUserId, "reminder_status_logs", id),
+        );
+        console.log("✅ Status log deleted:", id);
+      } catch (logError) {
+        // Log might not exist yet, that's okay
+        console.log("ℹ️ No matching status log found for reminder:", id);
+      }
+
+      Alert.alert("Success", "Reminder deleted successfully");
     } catch (error: any) {
-      Alert.alert("Error", error.message || "Failed to delete reminder");
+      console.error("❌ Delete reminder error:", error);
+      throw error; // Re-throw to be caught by handleDeleteReminder
     }
   };
   const resetReminderForm = () => {
@@ -2120,17 +2261,20 @@ export default function MedicationsScreen() {
       </Modal>
 
       {/* ========== INTERACTION WARNING MODAL ========== */}
+      {/* ========== INTERACTION WARNING MODAL ========== */}
       <Modal
         animationType="slide"
         transparent
         visible={interactionModalVisible}
         onRequestClose={() => {
           setInteractionModalVisible(false);
-          setPendingMedication(null); // ✅ clear stale pending data
-          setInteractionWarnings([]); // ✅ clear stale warnings too
+          setPendingMedication(null);
+          setInteractionWarnings([]);
         }}
       >
         <View style={styles.modalContainer}>
+          {" "}
+          {/* ✅ Changed from SafeAreaView */}
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: Colors.warning }]}>
@@ -2256,6 +2400,7 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
   },
   keyboardAvoidingContainer: {
     flex: 1,

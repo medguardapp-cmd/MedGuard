@@ -637,6 +637,111 @@ async function fetchInteractionContext(meds: MedDoc[]): Promise<string> {
 
 // ─── 7. Build system prompt ───────────────────────────────────────────────────
 
+// ─── ADD THIS HELPER (copy from your index.tsx) ──────────────────────────────
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function isReminderActiveOnDate(
+  reminder: any,
+  date: Date,
+  medication?: any,
+): boolean {
+  if (!reminder.enabled) return false;
+
+  const normalizedDate = new Date(date);
+  normalizedDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // ✅ Handle until-empty
+  if (reminder.durationType === "until-empty") {
+    if (
+      !medication ||
+      medication.quantity === undefined ||
+      medication.quantity <= 0
+    ) {
+      return false;
+    }
+
+    const createdDate = reminder.createdAt?.toDate
+      ? new Date(reminder.createdAt.toDate())
+      : new Date();
+    createdDate.setHours(0, 0, 0, 0);
+
+    if (normalizedDate <= today) {
+      const daysSinceCreation = Math.floor(
+        (normalizedDate.getTime() - createdDate.getTime()) /
+          (1000 * 60 * 60 * 24),
+      );
+      const totalDays = daysSinceCreation + medication.quantity;
+      return daysSinceCreation < totalDays;
+    } else {
+      const daysFromToday = Math.floor(
+        (normalizedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+      );
+      return daysFromToday < medication.quantity;
+    }
+  }
+
+  // Handle one-time reminders (no days array)
+  if (!reminder.days || reminder.days.length === 0) {
+    if (reminder.scheduledDate) {
+      const scheduledDate = new Date(reminder.scheduledDate);
+      scheduledDate.setHours(0, 0, 0, 0);
+      return normalizedDate.getTime() === scheduledDate.getTime();
+    }
+
+    // Fallback to creation date
+    const createdDate = reminder.createdAt?.toDate
+      ? reminder.createdAt.toDate()
+      : new Date(reminder.createdAt);
+
+    const firstTime =
+      reminder.times && reminder.times.length > 0 ? reminder.times[0] : "08:00";
+    const [hours, minutes] = firstTime.split(":").map(Number);
+
+    const reminderDateTime = new Date(createdDate);
+    reminderDateTime.setHours(hours, minutes, 0, 0);
+
+    if (reminderDateTime <= createdDate) {
+      reminderDateTime.setDate(reminderDateTime.getDate() + 1);
+    }
+
+    const scheduledDate = new Date(reminderDateTime);
+    scheduledDate.setHours(0, 0, 0, 0);
+    return normalizedDate.getTime() === scheduledDate.getTime();
+  }
+
+  // For recurring reminders with days
+  const dayName = DAY_NAMES[normalizedDate.getDay()];
+  if (!reminder.days.includes(dayName)) return false;
+
+  if (reminder.createdAt) {
+    const createdDate = reminder.createdAt?.toDate
+      ? new Date(reminder.createdAt.toDate())
+      : new Date(reminder.createdAt);
+    createdDate.setHours(0, 0, 0, 0);
+    if (normalizedDate < createdDate) return false;
+  }
+
+  if (reminder.durationType === "date-range") {
+    if (reminder.startDate) {
+      const startDate = new Date(reminder.startDate);
+      startDate.setHours(0, 0, 0, 0);
+      if (normalizedDate < startDate) return false;
+    }
+    if (reminder.endDate) {
+      const endDate = new Date(reminder.endDate);
+      endDate.setHours(0, 0, 0, 0);
+      if (normalizedDate > endDate) return false;
+    }
+  }
+
+  return true;
+}
+
+// ─── 7. Build system prompt (FIXED) ─────────────────────────────────────────
+
 async function buildSystemPrompt(uid: string): Promise<string> {
   const profile = await getUserProfile(uid);
   const userData = profile?.userData ?? {};
@@ -652,15 +757,7 @@ async function buildSystemPrompt(uid: string): Promise<string> {
   const notes = medicalData.notes ?? "";
   const allergies: string[] = medicalData.allergies ?? [];
   const conditions: string[] = medicalData.conditions ?? [];
-  const meds = profile?.medications ?? [];
-
-  const medSummary = meds.map((m) => {
-    const parts = [m.name];
-    if (m.dosage) parts.push(m.dosage);
-    if (m.is_combination && m.ingredients?.length)
-      parts.push(`(${m.ingredients.join(" + ")})`);
-    return parts.join(" ");
-  });
+  const allMeds = profile?.medications ?? [];
 
   const today = new Date();
   const todayKey = today.toDateString();
@@ -669,41 +766,56 @@ async function buildSystemPrompt(uid: string): Promise<string> {
     month: "long",
     day: "numeric",
   });
-  const todayDayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-    today.getDay()
-  ];
 
-  const [
-    medContext,
-    interactionContext,
-    takenSnap,
-    remindersSnap,
-    reactionsCacheSnap,
-  ] = await Promise.all([
-    fetchMedicationContext(meds),
-    fetchInteractionContext(meds),
+  const [remindersSnap, takenSnap, reactionsCacheSnap] = await Promise.all([
+    getDocs(collection(db, "users", uid, "reminders")),
     getDocs(
       query(
         collection(db, "users", uid, "taken_logs"),
         where("dateKey", "==", todayKey),
       ),
     ),
-    getDocs(collection(db, "users", uid, "reminders")),
     getDoc(doc(db, "users", uid, "reactions_cache", "latest")),
   ]);
 
-  const todayReminders = remindersSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }) as any)
-    .filter((r: any) => {
-      if (!r.enabled) return false;
-      if (!r.days || r.days.length === 0) return true;
-      return r.days.includes(todayDayName);
-    });
+  const allReminders = remindersSnap.docs.map(
+    (d) =>
+      ({
+        id: d.id,
+        ...d.data(),
+      }) as any,
+  );
+
+  // ✅ Use the SAME isReminderActiveOnDate function as index.tsx
+  const todayReminders = allReminders.filter((r: any) => {
+    const medication = allMeds.find((m) => m.id === r.medicationId);
+    return isReminderActiveOnDate(r, today, medication);
+  });
+
+  // Get medication IDs that are active today
+  const todayMedicationIds = new Set(
+    todayReminders.map((r: any) => r.medicationId),
+  );
+
+  // ✅ Filter to ONLY medications that have reminders today
+  const todayMeds = allMeds.filter((m) => todayMedicationIds.has(m.id));
+
+  console.log("📅 Today's reminders:", todayReminders.length);
+  console.log(
+    "💊 Today's medications:",
+    todayMeds.map((m) => m.name),
+  );
+
+  // Fetch contexts with TODAY'S medications only
+  const [medContext, interactionContext] = await Promise.all([
+    fetchMedicationContext(todayMeds),
+    fetchInteractionContext(todayMeds),
+  ]);
 
   const scheduledLines = todayReminders.length
     ? todayReminders.map(
         (r: any) =>
-          `  - ${r.medicationName} ${r.medicationDosage} at ${r.time}`,
+          `  - ${r.medicationName} ${r.medicationDosage} at ${r.time || r.times?.[0] || "08:00"}`,
       )
     : ["  None scheduled today"];
 
@@ -722,7 +834,7 @@ async function buildSystemPrompt(uid: string): Promise<string> {
   );
   const missedLines = missedReminders.map(
     (r: any) =>
-      `  - ${r.medicationName} ${r.medicationDosage} (scheduled ${r.time})`,
+      `  - ${r.medicationName} ${r.medicationDosage} (scheduled ${r.time || r.times?.[0] || "08:00"})`,
   );
 
   let reactionsContext = "";
@@ -747,6 +859,14 @@ async function buildSystemPrompt(uid: string): Promise<string> {
       .filter(Boolean)
       .join("\n\n");
   }
+
+  const medSummary = todayMeds.map((m) => {
+    const parts = [m.name];
+    if (m.dosage) parts.push(m.dosage);
+    if (m.is_combination && m.ingredients?.length)
+      parts.push(`(${m.ingredients.join(" + ")})`);
+    return parts.join(" ");
+  });
 
   return `You are MEADGUARD, a friendly but professional medication assistant in a mobile health app.
 You help patients understand their medicines in simple, clear language.
@@ -803,7 +923,7 @@ PATIENT PROFILE
 Name: ${name}
 Age: ${age} | Gender: ${gender} | Date of birth: ${dob}
 Blood type: ${bloodType} | Height: ${height} cm | Weight: ${weight} kg
-Active medications: ${medSummary.length ? medSummary.join("; ") : "None recorded"}
+Active medications TODAY: ${medSummary.length ? medSummary.join("; ") : "None scheduled for today"}
 Allergies: ${allergies.length ? allergies.join(", ") : "None recorded"}
 Medical conditions: ${conditions.length ? conditions.join(", ") : "None recorded"}
 ${notes ? `Clinical notes: ${notes}` : ""}
@@ -820,16 +940,18 @@ Missed — scheduled but not yet taken (${missedReminders.length}):
 ${missedReminders.length ? missedLines.join("\n") : "  None — all caught up!"}
 =========================================
 
-SCHEDULE RULES:
+⚠️ CRITICAL RULES:
 - "Today's medications" = ONLY the ${todayReminders.length} item(s) above.
-- Set "taken": true for meds in the "Already taken" list, false otherwise.
-- Never report medications not in today's schedule as due today.
+- When asked about "today's meds" or "my medications", ONLY mention the ones 
+  scheduled today (${todayMeds.map((m) => m.name).join(", ") || "none"}).
+- DO NOT mention medications that are not in today's schedule.
+- If there are no medications scheduled today, say so clearly.
 
-MEDICATION DATABASE (patient's current drugs)
-${medContext || "No database records found for current medications."}
+MEDICATION DATABASE (TODAY'S medications only)
+${medContext || "No medications scheduled for today."}
 
-KNOWN INTERACTIONS BETWEEN CURRENT MEDICATIONS
-${interactionContext || "No interactions found between current medications."}
+KNOWN INTERACTIONS BETWEEN TODAY'S MEDICATIONS
+${interactionContext || "No interactions found between today's medications."}
 
 AI REACTIONS ANALYSIS:
 ${reactionsContext || "No reactions analysis available yet."}
