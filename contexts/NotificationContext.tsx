@@ -207,8 +207,15 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       AsyncStorage.getItem("notifications"),
       AsyncStorage.getItem("notif_dedupe"),
     ]).then(([notifRaw, dedupeRaw]) => {
+      // In the existing load useEffect, replace the dedupeRaw handling:
       if (dedupeRaw) {
-        dedupeRef.current = new Set(JSON.parse(dedupeRaw));
+        const today = new Date().toDateString();
+        const allKeys: string[] = JSON.parse(dedupeRaw);
+        // Only keep today's keys — old ones are irrelevant
+        const todayKeys = allKeys.filter((k) => k.endsWith(today));
+        dedupeRef.current = new Set(todayKeys);
+        // Write back pruned version immediately
+        AsyncStorage.setItem("notif_dedupe", JSON.stringify(todayKeys));
       }
       if (notifRaw) {
         const parsed = JSON.parse(notifRaw);

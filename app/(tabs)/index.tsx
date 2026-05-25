@@ -61,6 +61,7 @@ import {
   checkMissedAndLateDoses,
   checkSevereInteractions,
   checkTodaysMedicationInteractions,
+  restoreNotifiedInteractions,
 } from "../../services/notificationService";
 
 const originalConsoleLog = console.log;
@@ -759,6 +760,8 @@ export default function HomeScreen() {
         );
       }
     });
+
+    restoreNotifiedInteractions(notifiedInteractionsRef);
   }, []);
   useEffect(() => {
     const runChecks = async () => {

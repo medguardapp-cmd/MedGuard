@@ -2,12 +2,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +19,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import Colors from "@/constants/colors";
+import { auth, db } from "@/lib/firebase";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,11 +45,49 @@ interface CapturedPhoto {
   base64: string;
   uri: string;
 }
+
 function getConfidenceScore(confidence: "high" | "low", wasRetried: boolean) {
   if (confidence === "high" && wasRetried) return 95;
   if (confidence === "high") return 85;
   if (confidence === "low" && wasRetried) return 70;
   return 55;
+}
+
+// ─── Expiration helpers ───────────────────────────────────────────────────────
+
+/**
+ * Parses MM/YYYY or MM/DD/YYYY (with optional trailing ?) into a Date.
+ * Returns null if unparseable.
+ */
+function parseExpirationDate(raw: string | null): Date | null {
+  if (!raw) return null;
+  const clean = raw.replace(/\?$/, "").trim();
+
+  // MM/YYYY
+  const mmyyyy = clean.match(/^(\d{1,2})\/(\d{4})$/);
+  if (mmyyyy) {
+    const month = parseInt(mmyyyy[1], 10) - 1;
+    const year = parseInt(mmyyyy[2], 10);
+    // Expires at the END of that month
+    return new Date(year, month + 1, 0);
+  }
+
+  // MM/DD/YYYY
+  const mmddyyyy = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mmddyyyy) {
+    const month = parseInt(mmddyyyy[1], 10) - 1;
+    const day = parseInt(mmddyyyy[2], 10);
+    const year = parseInt(mmddyyyy[3], 10);
+    return new Date(year, month, day);
+  }
+
+  return null;
+}
+
+function isMedicationExpired(expirationDate: string | null): boolean {
+  const expDate = parseExpirationDate(expirationDate);
+  if (!expDate) return false;
+  return expDate < new Date();
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -135,8 +176,6 @@ Return JSON with exactly these fields:
 }
 
 // ─── GPT-4o Vision — dark-text fallback retry ────────────────────────────────
-// Called when the first pass returns low confidence. Uses a more aggressive
-// prompt focused on squeezing out hard-to-read / dark / embossed text.
 
 async function retryWithEnhancedPrompt(
   front: CapturedPhoto,
@@ -254,6 +293,56 @@ async function openCamera(): Promise<CapturedPhoto | null> {
   return { base64: asset.base64, uri: asset.uri };
 }
 
+// ─── Firestore — save medication ─────────────────────────────────────────────
+
+/**
+ * Parses a dosage string like "500mg", "10mg/5ml", "1g" into
+ * { amount: number, unit: string }.
+ */
+function parseDosage(dosageMg: string | null): {
+  dosageAmount: number;
+  dosageUnit: string;
+} {
+  if (!dosageMg) return { dosageAmount: 0, dosageUnit: "mg" };
+
+  const match = dosageMg.match(/^([\d.]+)\s*([a-zA-Z/]+)/);
+  if (match) {
+    return {
+      dosageAmount: parseFloat(match[1]),
+      dosageUnit: match[2].toLowerCase(),
+    };
+  }
+  return { dosageAmount: 0, dosageUnit: "mg" };
+}
+
+async function saveMedicationToFirestore(
+  result: ScannedMedicine,
+): Promise<void> {
+  const userId = auth.currentUser?.uid;
+  if (!userId) throw new Error("You must be logged in to add medications.");
+
+  const { dosageAmount, dosageUnit } = parseDosage(result.dosageMg);
+
+  await addDoc(collection(db, "users", userId, "medications"), {
+    name: result.name ?? "Unknown Medication",
+    generic_name: result.name ?? "",
+    dosageAmount,
+    dosageUnit,
+    drug_id: "",
+    drug_ids: [],
+    ingredients: [],
+    is_combination: false,
+    active: true,
+    quantity: 1,
+    notes: result.expirationDate ? `Expiration: ${result.expirationDate}` : "",
+    refillReminder: false,
+    scannedFromLabel: true,
+    rawLabelText: result.rawText ?? "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function ScanScreen() {
@@ -264,6 +353,8 @@ export default function ScanScreen() {
   const [result, setResult] = useState<ScannedMedicine | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [wasRetried, setWasRetried] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showExpiredModal, setShowExpiredModal] = useState(false);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -300,8 +391,40 @@ export default function ScanScreen() {
     setResult(null);
     setError(null);
     setWasRetried(false);
+    setIsSaving(false);
+    setShowExpiredModal(false);
     fadeAnim.setValue(0);
     pulseAnim.setValue(1);
+  };
+
+  // ── Add to medications ────────────────────────────────────────────────────
+
+  const handleAddMedication = async () => {
+    if (!result) return;
+
+    // Block if expired
+    if (isMedicationExpired(result.expirationDate)) {
+      setShowExpiredModal(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await saveMedicationToFirestore(result);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        "Medication Added",
+        `${result.name ?? "Medication"} has been added to your medications.`,
+        [{ text: "OK", onPress: reset }],
+      );
+    } catch (err: any) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Error", err.message ?? "Failed to save medication.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // ── Step 1: Capture front ─────────────────────────────────────────────────
@@ -353,7 +476,6 @@ export default function ScanScreen() {
 
       let medicine = await scanMedicineImages(front, back);
 
-      // ── Not medicine: bail out early ──────────────────────────────────────
       if (!medicine.isMedicine) {
         pulseAnim.stopAnimation();
         pulseAnim.setValue(1);
@@ -364,7 +486,6 @@ export default function ScanScreen() {
         return;
       }
 
-      // ── Low confidence: retry with enhanced dark-text prompt ──────────────
       if (medicine.confidence === "low") {
         setStatus("retrying");
         const retry = await retryWithEnhancedPrompt(
@@ -374,8 +495,6 @@ export default function ScanScreen() {
         );
         setWasRetried(true);
 
-        // Merge: prefer retry values but fall back to first-pass if retry is
-        // also null (belt-and-suspenders in case the retry gives less info)
         medicine = {
           isMedicine: retry.isMedicine ?? medicine.isMedicine,
           name: retry.name ?? medicine.name,
@@ -385,7 +504,6 @@ export default function ScanScreen() {
           confidence: retry.confidence,
         };
 
-        // Re-check isMedicine after retry (edge case)
         if (!medicine.isMedicine) {
           pulseAnim.stopAnimation();
           pulseAnim.setValue(1);
@@ -402,7 +520,14 @@ export default function ScanScreen() {
       setResult(medicine);
       setStatus("done");
       fadeInResult();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Auto-show expired modal right after scan completes
+      if (isMedicationExpired(medicine.expirationDate)) {
+        setShowExpiredModal(true);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
     } catch (err: any) {
       pulseAnim.stopAnimation();
       pulseAnim.setValue(1);
@@ -412,12 +537,48 @@ export default function ScanScreen() {
     }
   };
 
-  // ── UI ────────────────────────────────────────────────────────────────────
+  // ── Derived state ─────────────────────────────────────────────────────────
 
   const isProcessing = status === "processing" || status === "retrying";
+  const isExpired = result ? isMedicationExpired(result.expirationDate) : false;
+
+  // ── UI ────────────────────────────────────────────────────────────────────
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
+      {/* ── Expired medication modal ───────────────────────────────────────── */}
+      <Modal
+        visible={showExpiredModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowExpiredModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalIconWrap}>
+              <Ionicons name="warning" size={40} color="#E74C3C" />
+            </View>
+            <Text style={styles.modalTitle}>Expired Medication</Text>
+            <Text style={styles.modalBody}>
+              Do not take this medication.{"\n"}It has passed its expiration
+              date
+              {result?.expirationDate ? ` (${result.expirationDate})` : ""} and
+              may be ineffective or harmful.
+            </Text>
+            <Text style={styles.modalAdvice}>
+              Please dispose of it safely and consult your pharmacist for a
+              replacement.
+            </Text>
+            <TouchableOpacity
+              style={styles.modalBtn}
+              onPress={() => setShowExpiredModal(false)}
+            >
+              <Text style={styles.modalBtnText}>I Understand</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Scan Medicine</Text>
@@ -477,7 +638,11 @@ export default function ScanScreen() {
 
         {/* Scanner state card */}
         <View
-          style={[styles.scanCard, status === "done" && styles.scanCardDone]}
+          style={[
+            styles.scanCard,
+            status === "done" && styles.scanCardDone,
+            status === "done" && isExpired && styles.scanCardExpired,
+          ]}
         >
           <View style={[styles.corner, styles.tl]} />
           <View style={[styles.corner, styles.tr]} />
@@ -549,10 +714,17 @@ export default function ScanScreen() {
                 resizeMode="cover"
               />
               <View style={styles.scanCardOverlay} />
-              <View style={styles.scanCardBadge}>
-                <Ionicons name="checkmark-circle" size={15} color="#fff" />
-                <Text style={styles.scanCardBadgeText}>Scanned</Text>
-              </View>
+              {isExpired ? (
+                <View style={styles.scanCardBadgeExpired}>
+                  <Ionicons name="warning" size={15} color="#fff" />
+                  <Text style={styles.scanCardBadgeText}>Expired</Text>
+                </View>
+              ) : (
+                <View style={styles.scanCardBadge}>
+                  <Ionicons name="checkmark-circle" size={15} color="#fff" />
+                  <Text style={styles.scanCardBadgeText}>Scanned</Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -584,19 +756,30 @@ export default function ScanScreen() {
         {status === "done" && result && (
           <Animated.View style={[styles.resultCard, { opacity: fadeAnim }]}>
             <View style={styles.resultHeader}>
-              <Ionicons name="checkmark-circle" size={24} color="#27AE60" />
-              <Text style={styles.resultHeaderText}>Medicine Detected</Text>
-              {backPhoto && (
+              <Ionicons
+                name={isExpired ? "warning" : "checkmark-circle"}
+                size={24}
+                color={isExpired ? "#E74C3C" : "#27AE60"}
+              />
+              <Text style={styles.resultHeaderText}>
+                {isExpired ? "Expired Medication" : "Medicine Detected"}
+              </Text>
+              {backPhoto && !isExpired && (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>Front + Back</Text>
                 </View>
               )}
-              {wasRetried && (
+              {wasRetried && !isExpired && (
                 <View style={styles.retriedBadge}>
                   <Text style={styles.retriedBadgeText}>Enhanced Scan</Text>
                 </View>
               )}
-              {result.confidence === "low" && (
+              {isExpired && (
+                <View style={styles.expiredBadge}>
+                  <Text style={styles.expiredBadgeText}>EXPIRED</Text>
+                </View>
+              )}
+              {result.confidence === "low" && !isExpired && (
                 <View style={styles.lowConfidenceBadge}>
                   <Text style={styles.lowConfidenceText}>Low confidence</Text>
                 </View>
@@ -619,16 +802,28 @@ export default function ScanScreen() {
               icon="calendar-outline"
               label="Expiration Date"
               value={result.expirationDate}
+              isExpired={isExpired}
             />
 
-            {result.confidence === "low" && (
+            {/* Expired warning banner */}
+            {isExpired && (
+              <View style={styles.expiredBanner}>
+                <Ionicons name="warning" size={16} color="#E74C3C" />
+                <Text style={styles.expiredBannerText}>
+                  This medication has expired and cannot be added to your
+                  medications. Please dispose of it safely.
+                </Text>
+              </View>
+            )}
+
+            {result.confidence === "low" && !isExpired && (
               <Text style={styles.confidenceWarning}>
                 ⚠️ Some fields may be inaccurate. Please verify against the
                 label.
               </Text>
             )}
 
-            {wasRetried && result.confidence === "high" && (
+            {wasRetried && result.confidence === "high" && !isExpired && (
               <Text style={styles.enhancedNote}>
                 ✨ Enhanced scan recovered additional details from hard-to-read
                 text.
@@ -636,6 +831,31 @@ export default function ScanScreen() {
             )}
 
             <View style={styles.resultActions}>
+              {/* Add to Medications — disabled when expired */}
+              <TouchableOpacity
+                style={[styles.addBtn, isExpired && styles.addBtnDisabled]}
+                onPress={handleAddMedication}
+                disabled={isExpired || isSaving}
+                activeOpacity={isExpired ? 1 : 0.8}
+              >
+                {isSaving ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons
+                    name={isExpired ? "ban-outline" : "add-circle-outline"}
+                    size={20}
+                    color="#fff"
+                  />
+                )}
+                <Text style={styles.addBtnText}>
+                  {isSaving
+                    ? "Saving…"
+                    : isExpired
+                      ? "Cannot Add — Expired"
+                      : "Add to Medications"}
+                </Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={styles.scanAgainBtn} onPress={reset}>
                 <Ionicons
                   name="refresh-outline"
@@ -842,23 +1062,33 @@ function ResultRow({
   icon,
   label,
   value,
+  isExpired,
 }: {
   icon: any;
   label: string;
   value: string | null;
+  isExpired?: boolean;
 }) {
+  const isExpiredField = label === "Expiration Date" && isExpired;
   return (
     <View style={styles.resultRow}>
       <Ionicons
         name={icon}
         size={18}
-        color={Colors.primary}
+        color={isExpiredField ? "#E74C3C" : Colors.primary}
         style={styles.resultRowIcon}
       />
       <View style={styles.resultRowText}>
         <Text style={styles.resultRowLabel}>{label}</Text>
-        <Text style={[styles.resultRowValue, !value && styles.resultRowNull]}>
+        <Text
+          style={[
+            styles.resultRowValue,
+            !value && styles.resultRowNull,
+            isExpiredField && styles.resultRowExpired,
+          ]}
+        >
           {value ?? "Not found"}
+          {isExpiredField ? " ⚠️" : ""}
         </Text>
       </View>
     </View>
@@ -959,6 +1189,10 @@ const styles = StyleSheet.create({
     height: 220,
     padding: 0,
   },
+  scanCardExpired: {
+    borderWidth: 2,
+    borderColor: "#E74C3C",
+  },
   scanCardDoneContent: {
     position: "absolute",
     top: 0,
@@ -982,6 +1216,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
     backgroundColor: "rgba(39,174,96,0.88)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  scanCardBadgeExpired: {
+    position: "absolute",
+    bottom: 14,
+    right: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(231,76,60,0.90)",
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
@@ -1075,6 +1321,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   retriedBadgeText: { fontSize: 11, color: "#E65100", fontWeight: "600" },
+  expiredBadge: {
+    backgroundColor: "#FDECEA",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  expiredBadgeText: { fontSize: 11, color: "#E74C3C", fontWeight: "700" },
   lowConfidenceBadge: {
     backgroundColor: "#FFF3CD",
     paddingHorizontal: 8,
@@ -1094,6 +1347,27 @@ const styles = StyleSheet.create({
   resultRowLabel: { fontSize: 12, color: "#999", marginBottom: 2 },
   resultRowValue: { fontSize: 15, fontWeight: "600", color: "#1A1A2E" },
   resultRowNull: { color: "#CCC", fontStyle: "italic", fontWeight: "400" },
+  resultRowExpired: { color: "#E74C3C" },
+
+  // Expired banner
+  expiredBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FDECEA",
+    borderWidth: 1,
+    borderColor: "#F5C6CB",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  expiredBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#C0392B",
+    lineHeight: 18,
+  },
+
   confidenceWarning: {
     fontSize: 12,
     color: "#856404",
@@ -1121,6 +1395,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  addBtnDisabled: {
+    backgroundColor: "#CCC",
   },
   addBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   scanAgainBtn: {
@@ -1208,4 +1485,66 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
   },
   fabText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+
+  // Expired modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+  },
+  modalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    padding: 28,
+    alignItems: "center",
+    width: "100%",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  modalIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#FDECEA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#C0392B",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  modalBody: {
+    fontSize: 15,
+    color: "#333",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 10,
+  },
+  modalAdvice: {
+    fontSize: 13,
+    color: "#888",
+    textAlign: "center",
+    lineHeight: 19,
+    marginBottom: 24,
+  },
+  modalBtn: {
+    backgroundColor: "#E74C3C",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    alignItems: "center",
+  },
+  modalBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 15,
+  },
 });

@@ -1328,7 +1328,7 @@ export default function MedicationsScreen() {
               activeTab === "reminders" && styles.activeTabText,
             ]}
           >
-            Reminders
+            Schedules
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -1692,7 +1692,7 @@ export default function MedicationsScreen() {
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
-                  {editingReminder ? "Edit Reminder" : "New Reminder"}
+                  {editingReminder ? "Edit Schedule" : "New Schedule"}
                 </Text>
                 <TouchableOpacity
                   onPress={() => {

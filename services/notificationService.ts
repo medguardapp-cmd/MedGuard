@@ -127,6 +127,19 @@ export const restoreNotifiedRefs = async (
     notifiedMissedRef.current = new Set(keys);
   }
 };
+export const restoreNotifiedInteractions = async (
+  notifiedInteractionsRef: React.RefObject<Set<string>>,
+) => {
+  const raw = await AsyncStorage.getItem("notified_interactions");
+  if (raw) {
+    const today = new Date().toDateString();
+    // Prune keys not from today so new days always re-evaluate
+    const keys: string[] = JSON.parse(raw).filter((k: string) =>
+      k.endsWith(today),
+    );
+    notifiedInteractionsRef.current = new Set(keys);
+  }
+};
 
 // 1. Check for late/missed doses
 export const checkMissedAndLateDoses = async (
@@ -175,7 +188,7 @@ export const checkMissedAndLateDoses = async (
       )
         continue;
 
-      // --- LATE: 15–60 min ---
+      // --- LATE: 15–60 min — in-app + push only, not high-risk enough for email ---
       if (diffMinutes >= 15 && diffMinutes < 60) {
         notifiedLateRef.current.add(key);
         AsyncStorage.setItem(
@@ -192,17 +205,11 @@ export const checkMissedAndLateDoses = async (
           channelId: "medications",
         });
 
-        // Safe email notification for late dose
-        await safeEmailNotification(
-          "sendMissedDose",
-          reminder.medicationName,
-          reminder.medicationDosage,
-          formatTime12h(time),
-        );
+        // No email — late doses are low-risk; push notification is sufficient
         continue;
       }
 
-      // --- MISSED SOFT: 60–120 min ---
+      // --- MISSED SOFT: 60–120 min — in-app + push only, not critical enough for email ---
       if (diffMinutes >= 60 && diffMinutes < 120) {
         notifiedMissedRef.current.add(key);
         AsyncStorage.setItem(
@@ -227,17 +234,11 @@ export const checkMissedAndLateDoses = async (
           channelId: "medications",
         });
 
-        // Safe email notification for missed dose
-        await safeEmailNotification(
-          "sendMissedDose",
-          reminder.medicationName,
-          reminder.medicationDosage,
-          formatTime12h(time),
-        );
+        // No email — soft missed doses are moderate risk; push notification is sufficient
         continue;
       }
 
-      // --- MISSED HARD: 120+ min ---
+      // --- MISSED HARD: 120+ min — HIGH RISK, send email ---
       if (diffMinutes >= 120) {
         notifiedMissedRef.current.add(key);
         AsyncStorage.setItem(
@@ -262,7 +263,7 @@ export const checkMissedAndLateDoses = async (
           channelId: "medication-alarms",
         });
 
-        // Safe email notification for critical missed dose
+        // Email — critical missed dose (120+ min) is high-risk
         await safeEmailNotification(
           "sendMissedDose",
           reminder.medicationName,
@@ -365,7 +366,7 @@ export const checkConsecutiveMissedDays = async (
         channelId: "medications",
       });
 
-      // Try multiple possible function names for adherence
+      // Email — consecutive missed days is a high-risk adherence pattern
       await safeEmailNotification(
         "sendLowAdherence",
         reminder.medicationName,
@@ -387,10 +388,17 @@ export const checkInteractions = async (
 
     if (severity !== "mild" && severity !== "severe") continue;
 
-    const key = `${interaction.drug_id}_${interaction.interacts_with}`;
+    // REPLACE with these 4 lines:
+    const today = new Date().toDateString();
+    const key = `${interaction.drug_id}_${interaction.interacts_with}_${today}`;
     if (notifiedInteractionsRef.current.has(key)) continue;
-
     notifiedInteractionsRef.current.add(key);
+
+    // Persist after adding
+    AsyncStorage.setItem(
+      "notified_interactions",
+      JSON.stringify([...notifiedInteractionsRef.current]),
+    );
 
     const med1 = medications.find((m) => m.drug_id === interaction.drug_id);
     const med2 = medications.find(
@@ -412,8 +420,16 @@ export const checkInteractions = async (
         sendPush: true,
         channelId: "medication-alarms",
       });
+
+      // Email — severe interactions are high-risk and require immediate attention
+      await safeEmailNotification(
+        "sendDrugInteraction",
+        med1?.name ?? interaction.drug_id,
+        med2?.name ?? interaction.interacts_with,
+        interaction.description,
+      );
     } else {
-      // Mild interaction — in-app + push per spec
+      // Mild interaction — in-app + push only, not severe enough for email
       addNotification({
         title: "⚠️ Drug Interaction Notice",
         message: `${med1?.name ?? interaction.drug_id} may have a mild interaction with ${med2?.name ?? interaction.interacts_with}. Monitor for side effects.`,
@@ -428,15 +444,9 @@ export const checkInteractions = async (
         sendPush: true,
         channelId: "interactions",
       });
-    }
 
-    // Safe email notification for drug interaction
-    await safeEmailNotification(
-      "sendDrugInteraction",
-      med1?.name ?? interaction.drug_id,
-      med2?.name ?? interaction.interacts_with,
-      interaction.description,
-    );
+      // No email — mild interactions are informational; push notification is sufficient
+    }
   }
 };
 
@@ -476,6 +486,8 @@ export const checkCaregiverRequests = async (
         sendPush: true,
         channelId: "general",
       });
+
+      // No email — caregiver requests are informational; push notification is sufficient
     }
   } catch (error) {
     console.error("Error checking caregiver requests:", error);
@@ -557,14 +569,14 @@ export const checkCaregiverPatientMissedDoses = async (
             channelId: "medications",
           });
 
-          // Safe email notification to caregiver about patient's missed dose
+          // Email — caregiver oversight of patient missed dose is high-risk
           await safeEmailNotification(
             "sendPatientMissed",
             patient.name,
             reminder.medicationName,
             reminder.medicationDosage,
             formatTime12h(time),
-            { _userId: patient.id }, // ← Add this to use patient's ID
+            { _userId: patient.id },
           );
         }
       }
@@ -605,7 +617,10 @@ export const checkTodaysMedicationInteractions = async (
     const key = `today_${interaction.drug_id}_${interaction.interacts_with}_${todayKey}`;
     if (notifiedInteractionsRef.current.has(key)) continue;
     notifiedInteractionsRef.current.add(key);
-
+    AsyncStorage.setItem(
+      "notified_interactions",
+      JSON.stringify([...notifiedInteractionsRef.current]),
+    );
     const med1 = medications.find((m) => m.drug_id === interaction.drug_id);
     const med2 = medications.find(
       (m) => m.drug_id === interaction.interacts_with,
@@ -630,12 +645,14 @@ export const checkTodaysMedicationInteractions = async (
       channelId: severity === "severe" ? "medication-alarms" : "interactions",
     });
 
-    // Safe email notification for today's medication interaction
-    await safeEmailNotification(
-      "sendDrugInteraction",
-      med1?.name ?? interaction.drug_id,
-      med2?.name ?? interaction.interacts_with,
-      interaction.description,
-    );
+    if (severity === "severe") {
+      // Email — severe interactions taken today require immediate action
+      await safeEmailNotification(
+        "sendDrugInteraction",
+        med1?.name ?? interaction.drug_id,
+        med2?.name ?? interaction.interacts_with,
+        interaction.description,
+      );
+    }
   }
 };

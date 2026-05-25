@@ -40,6 +40,8 @@ interface TakenLog {
   reminderId: string;
   name: string;
   dosage: string;
+  dosageAmount?: number;
+  dosageUnit?: string;
   takenAt: any;
   dateKey: string;
 }
@@ -65,13 +67,19 @@ const normalizeDate = (date: Date): Date => {
 };
 
 const formatDateLabel = (dateString: string): string => {
-  const date = new Date(dateString);
+  // Parse YYYY-MM-DD safely in local time
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = !isNaN(year)
+    ? new Date(year, month - 1, day)
+    : new Date(dateString);
+
   const today = normalizeDate(new Date());
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
 
-  if (date.toDateString() === today.toDateString()) return "Today";
-  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  if (normalizeDate(date).getTime() === today.getTime()) return "Today";
+  if (normalizeDate(date).getTime() === normalizeDate(yesterday).getTime())
+    return "Yesterday";
 
   return date.toLocaleDateString("en-US", {
     weekday: "long",
@@ -287,7 +295,12 @@ export default function MedicationLogsScreen() {
           reminderId: l.reminderId,
           medicationId: l.medicationId,
           name: l.name,
-          dosage: l.dosage ?? "",
+          dosage:
+            l.dosage ??
+            (l.dosageAmount != null
+              ? `${l.dosageAmount} ${l.dosageUnit || "mg"}`
+              : ""),
+
           scheduledTime,
           dateKey: l.dateKey,
           status: "taken",
@@ -315,8 +328,9 @@ export default function MedicationLogsScreen() {
 
       initDate(log.dateKey);
 
-      const isPastDate = log.dateKey < todayKey;
-
+      const logDate = new Date(log.dateKey);
+      const isPastDate =
+        !isNaN(logDate.getTime()) && normalizeDate(logDate) < todayDate;
       // Guard: if a taken_log exists for this slot, don't also show it as missed
       // (handles race conditions where status log is stale)
       const wasTaken = takenLogs.some(
